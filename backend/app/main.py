@@ -7,6 +7,7 @@ from app.auth import get_password_hash, verify_password, create_access_token, ge
 from app.receipts import router as receipts_router
 from pydantic import BaseModel
 from typing import List, Optional
+from sqlalchemy import text, inspect
 
 from fastapi.staticfiles import StaticFiles
 
@@ -29,6 +30,22 @@ app.add_middleware(
 @app.on_event("startup")
 def on_startup():
     init_db()
+    # Auto-migration for color column
+    from app.database import engine
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("SELECT color FROM \"user\" LIMIT 1"))
+        except Exception:
+            # Column likely missing
+            print("Migrating database: Adding color column to user table")
+            conn.rollback() # Important to rollback the failed transaction
+            trans = conn.begin()
+            try:
+                conn.execute(text("ALTER TABLE \"user\" ADD COLUMN color VARCHAR DEFAULT '#3B82F6'"))
+                trans.commit()
+            except Exception as e:
+                trans.rollback()
+                print(f"Migration failed: {e}")
 
 class AuthRequest(BaseModel):
     username: str
