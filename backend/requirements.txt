@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+sqlmodel
+psycopg2-binary
+python-multipart
+python-jose[cryptography]
+bcrypt
+python-dotenv
+google-generativeai
+pydantic-settings
+alembic
+Pillow
