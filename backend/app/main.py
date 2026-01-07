@@ -6,7 +6,7 @@ from app.models import User
 from app.auth import get_password_hash, verify_password, create_access_token, get_current_user
 from app.receipts import router as receipts_router
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 
 from fastapi.staticfiles import StaticFiles
 
@@ -33,6 +33,10 @@ def on_startup():
 class AuthRequest(BaseModel):
     username: str
     password: str
+
+class UserUpdate(BaseModel):
+    password: Optional[str] = None
+    color: Optional[str] = None
 
 @app.post("/api/auth/register")
 def register(data: AuthRequest, db: Session = Depends(get_session)):
@@ -75,9 +79,20 @@ def logout(response: Response):
 
 @app.get("/api/auth/me")
 def get_me(current_user: User = Depends(get_current_user)):
-    return {"username": current_user.username, "id": current_user.id}
+    return {"username": current_user.username, "id": current_user.id, "color": current_user.color}
+
+@app.put("/api/auth/me")
+def update_me(data: UserUpdate, db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):
+    if data.password:
+        current_user.hashed_password = get_password_hash(data.password)
+    if data.color:
+        current_user.color = data.color
+    db.add(current_user)
+    db.commit()
+    db.refresh(current_user)
+    return {"message": "Profile updated", "user": {"id": current_user.id, "username": current_user.username, "color": current_user.color}}
 
 @app.get("/api/users")
 def list_users(db: Session = Depends(get_session)):
     users = db.exec(select(User)).all()
-    return [{"id": u.id, "username": u.username} for u in users]
+    return [{"id": u.id, "username": u.username, "color": u.color} for u in users]

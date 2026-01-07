@@ -114,7 +114,8 @@ def get_receipt(
                 "contributions": [
                     {
                         **c.dict(),
-                        "username": c.user.username
+                        "username": c.user.username,
+                        "color": c.user.color
                     } for c in item.contributions
                 ]
             } for item in items
@@ -122,7 +123,8 @@ def get_receipt(
         "participants": [
             {
                 **p.dict(),
-                "username": p.user.username
+                "username": p.user.username,
+                "color": p.user.color
             } for p in receipt.participants
         ]
     }

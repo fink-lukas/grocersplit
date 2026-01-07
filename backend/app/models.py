@@ -6,6 +6,7 @@ class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     username: str = Field(index=True, unique=True)
     hashed_password: str
+    color: str = Field(default="#3B82F6")
 
     receipts_uploaded: List["Receipt"] = Relationship(back_populates="uploader")
     contributions: List["Contribution"] = Relationship(back_populates="user")

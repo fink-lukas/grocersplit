@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import api from './api';
 import { useAuth } from './AuthContext';
-import { Plus, Receipt as ReceiptIcon, Archive, LogOut, ChevronRight, Image as ImageIcon } from 'lucide-react';
+import { Plus, Receipt as ReceiptIcon, Archive, LogOut, ChevronRight, Image as ImageIcon, User } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
 interface Receipt {
@@ -43,6 +43,13 @@ export const Dashboard: React.FC = () => {
                     </div>
                     <div className="flex items-center gap-4">
                         <span className="text-sm text-slate-400 hidden sm:block">Hi, {user?.username}</span>
+                        <Link
+                            to="/profile"
+                            className="p-2 text-slate-400 hover:text-white transition-colors"
+                            title="Profile"
+                        >
+                            <User className="w-5 h-5" />
+                        </Link>
                         <button
                             onClick={logout}
                             className="p-2 text-slate-400 hover:text-white transition-colors"
@@ -60,8 +67,8 @@ export const Dashboard: React.FC = () => {
                         <button
                             onClick={() => setShowArchived(!showArchived)}
                             className={`p-2 rounded-xl border transition-all ${showArchived
-                                    ? 'bg-slate-700 border-slate-600 text-white'
-                                    : 'border-slate-700 text-slate-400 hover:text-white'
+                                ? 'bg-slate-700 border-slate-600 text-white'
+                                : 'border-slate-700 text-slate-400 hover:text-white'
                                 }`}
                             title={showArchived ? "Show Active" : "Show Archived"}
                         >
@@ -104,8 +111,8 @@ export const Dashboard: React.FC = () => {
                                             <span>{new Date(receipt.created_at).toLocaleDateString()}</span>
                                             <span>•</span>
                                             <span className={`px-1.5 py-0.5 rounded-full uppercase tracking-wider font-bold ${receipt.status === 'pending' ? 'bg-amber-500/10 text-amber-500' :
-                                                    receipt.status === 'split' ? 'bg-green-500/10 text-green-500' :
-                                                        'bg-slate-700 text-slate-400'
+                                                receipt.status === 'split' ? 'bg-green-500/10 text-green-500' :
+                                                    'bg-slate-700 text-slate-400'
                                                 }`}>
                                                 {receipt.status}
                                             </span>

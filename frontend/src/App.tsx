@@ -5,6 +5,7 @@ import { AuthPage } from './AuthPage';
 import { Dashboard } from './Dashboard';
 import { UploadPage } from './UploadPage';
 import { ReceiptDetails } from './ReceiptDetails';
+import { ProfilePage } from './ProfilePage';
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, loading } = useAuth();
@@ -31,9 +32,15 @@ const App: React.FC = () => {
               <UploadPage />
             </ProtectedRoute>
           } />
+
           <Route path="/receipt/:id" element={
             <ProtectedRoute>
               <ReceiptDetails />
+            </ProtectedRoute>
+          } />
+          <Route path="/profile" element={
+            <ProtectedRoute>
+              <ProfilePage />
             </ProtectedRoute>
           } />
         </Routes>

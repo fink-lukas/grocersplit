@@ -2,12 +2,13 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import api from './api';
 import { useAuth } from './AuthContext';
-import { ArrowLeft, Check, Users, ShieldCheck, Archive as ArchiveIcon, Loader2, Info, Trash2, RotateCcw, Eye, EyeOff } from 'lucide-react';
+import { ArrowLeft, Check, Users, ShieldCheck, Archive as ArchiveIcon, Loader2, Info, Trash2, RotateCcw, Eye, EyeOff, X } from 'lucide-react';
 
 interface Contribution {
     user_id: number;
     username?: string;
     amount?: number;
+    color?: string;
 }
 
 interface Item {
@@ -36,6 +37,7 @@ export const ReceiptDetails: React.FC = () => {
     const [data, setData] = useState<ReceiptData | null>(null);
     const [loading, setLoading] = useState(true);
     const [showImage, setShowImage] = useState(false);
+    const [selectedUser, setSelectedUser] = useState<{ user_id: number; name: string; amount: number } | null>(null);
     const { user } = useAuth();
     const navigate = useNavigate();
 
@@ -113,12 +115,20 @@ export const ReceiptDetails: React.FC = () => {
     // Calculate totals for summary
     const totals = useMemo(() => {
         if (!data) return {};
-        const sums: Record<string, number> = {};
+        const sums: Record<string, { amount: number; color?: string; user_id: number; name: string }> = {};
 
         data.items.forEach(item => {
             item.contributions.forEach(c => {
-                const name = c.username || `User ${c.user_id}`;
-                sums[name] = (sums[name] || 0) + (c.amount || 0);
+                const key = c.user_id.toString();
+                if (!sums[key]) {
+                    sums[key] = {
+                        amount: 0,
+                        color: c.color,
+                        user_id: c.user_id,
+                        name: c.username || `User ${c.user_id}`
+                    };
+                }
+                sums[key].amount += (c.amount || 0);
             });
         });
         return sums;
@@ -238,11 +248,11 @@ export const ReceiptDetails: React.FC = () => {
                 )}
 
                 <div className="bg-slate-800 rounded-3xl border border-slate-700 overflow-hidden shadow-2xl">
-                    <div className="p-6 border-b border-slate-700 bg-slate-800/50 flex items-center justify-between text-sm font-medium text-slate-400 uppercase tracking-wider">
+                    <div className="p-4 sm:p-6 border-b border-slate-700 bg-slate-800/50 flex items-center justify-between text-sm font-medium text-slate-400 uppercase tracking-wider">
                         <span>Item</span>
-                        <div className="flex gap-12">
+                        <div className="flex gap-4 sm:gap-12">
                             <span className="w-20 text-right">Price</span>
-                            <span className="w-24 text-center">Status</span>
+                            <span className="w-12 sm:w-24 text-center">Status</span>
                         </div>
                     </div>
                     <div className="divide-y divide-slate-700/50">
@@ -251,10 +261,10 @@ export const ReceiptDetails: React.FC = () => {
                             return (
                                 <div
                                     key={item.id}
-                                    className={`flex items-center justify-between p-6 transition-all ${myClaim ? 'bg-primary-500/5' : 'hover:bg-white/5'
+                                    className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 sm:p-6 transition-all ${myClaim ? 'bg-primary-500/5' : 'hover:bg-white/5'
                                         }`}
                                 >
-                                    <div className="flex-1">
+                                    <div className="flex-1 mb-4 sm:mb-0">
                                         <h4 className="font-semibold text-lg text-white mb-1">{item.name}</h4>
                                         {item.quantity > 1 && (
                                             <div className="flex items-center gap-2 mt-1">
@@ -275,9 +285,9 @@ export const ReceiptDetails: React.FC = () => {
                                         <div className="flex flex-wrap gap-2 mt-3">
                                             {item.contributions.length > 0 ? (
                                                 item.contributions.map((c, idx) => (
-                                                    <div key={idx} className="bg-slate-900 border border-slate-700 px-3 py-1 rounded-full text-xs flex items-center gap-2">
-                                                        <div className="w-1.5 h-1.5 rounded-full bg-primary-500" />
-                                                        <span className="text-slate-300 font-medium">{c.username || `User ${c.user_id}`}</span>
+                                                    <div key={idx} className="bg-slate-900 border border-slate-700 px-3 py-1 rounded-full text-xs flex items-center gap-2" style={{ borderColor: c.color ? `${c.color}40` : undefined }}>
+                                                        <div className="w-2 h-2 rounded-full" style={{ backgroundColor: c.color || '#3B82F6' }} />
+                                                        <span className="font-medium" style={{ color: c.color || '#cbd5e1' }}>{c.username || `User ${c.user_id}`}</span>
                                                     </div>
                                                 ))
                                             ) : (
@@ -286,17 +296,17 @@ export const ReceiptDetails: React.FC = () => {
                                         </div>
                                     </div>
 
-                                    <div className="flex items-center gap-12">
-                                        <span className="w-20 text-right font-mono font-bold text-white">
+                                    <div className="flex items-center justify-between sm:justify-end gap-4 sm:gap-12 w-full sm:w-auto">
+                                        <span className="w-20 text-left sm:text-right font-mono font-bold text-white">
                                             €{((item.price * item.quantity) / 100).toFixed(2)}
                                         </span>
-                                        <div className="w-24 flex justify-center">
+                                        <div className="w-12 sm:w-24 flex justify-center">
                                             {receipt.status === 'pending' ? (
                                                 <button
                                                     onClick={() => handleClaim(item.id)}
                                                     className={`p-3 rounded-2xl transition-all border-2 ${myClaim
                                                         ? 'bg-primary-600 border-primary-500 text-white shadow-lg shadow-primary-600/30'
-                                                        : 'bg-slate-900 border-slate-700 text-slate-500 hover:border-slate-500 hover:text-white'
+                                                        : 'bg-slate-900 border-slate-700 text-slate-400 hover:bg-slate-800 hover:border-slate-500 hover:text-white'
                                                         }`}
                                                 >
                                                     <Check className={`w-5 h-5 ${myClaim ? 'stroke-[3px]' : ''}`} />
@@ -323,12 +333,90 @@ export const ReceiptDetails: React.FC = () => {
                             Final Summary
                         </h2>
                         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                            {Object.entries(totals).map(([name, amount]) => (
-                                <div key={name} className="bg-slate-900 p-4 rounded-xl border border-slate-700 flex items-center justify-between">
-                                    <span className="font-semibold text-slate-300">{name}</span>
-                                    <span className="font-bold text-white text-lg">€{(amount / 100).toFixed(2)}</span>
-                                </div>
+                            {Object.values(totals).map((summary) => (
+                                <button
+                                    key={summary.user_id}
+                                    onClick={() => setSelectedUser(summary)}
+                                    className="bg-slate-900 p-4 rounded-xl border border-slate-700 flex items-center justify-between hover:bg-slate-800 transition-all cursor-pointer group text-left w-full"
+                                    style={{ borderColor: summary.color ? `${summary.color}40` : undefined }}
+                                >
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-3 h-3 rounded-full" style={{ backgroundColor: summary.color || '#3B82F6' }} />
+                                        <span className="font-semibold text-slate-300 group-hover:text-white transition-colors" style={{ color: summary.color }}>{summary.name}</span>
+                                    </div>
+                                    <span className="font-bold text-white text-lg">€{(summary.amount / 100).toFixed(2)}</span>
+                                </button>
                             ))}
+                        </div>
+                    </div>
+                )}
+
+                {/* User Details Modal */}
+                {selectedUser && (
+                    <div
+                        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm"
+                        onClick={() => setSelectedUser(null)}
+                    >
+                        <div
+                            className="bg-slate-900 w-full max-w-2xl rounded-3xl border border-slate-700 shadow-2xl flex flex-col max-h-[85vh]"
+                            onClick={e => e.stopPropagation()}
+                        >
+                            <div className="p-6 border-b border-slate-700 flex items-center justify-between bg-slate-800/50 rounded-t-3xl">
+                                <div>
+                                    <h3 className="text-xl font-bold text-white mb-1">{selectedUser.name}'s Summary</h3>
+                                    <p className="text-slate-400">Total: <span className="text-primary-400 font-bold">€{(selectedUser.amount / 100).toFixed(2)}</span></p>
+                                </div>
+                                <button
+                                    onClick={() => setSelectedUser(null)}
+                                    className="p-2 hover:bg-slate-700 rounded-xl transition-colors text-slate-400 hover:text-white"
+                                >
+                                    <X className="w-6 h-6" />
+                                </button>
+                            </div>
+
+                            <div className="overflow-y-auto flex-1 p-6">
+                                <div className="space-y-1">
+                                    <div className="grid grid-cols-12 gap-4 px-4 py-2 text-xs font-bold text-slate-500 uppercase tracking-wider">
+                                        <div className="col-span-8">Item</div>
+                                        <div className="col-span-4 text-right">Share</div>
+                                    </div>
+                                    {items.map(item => {
+                                        const contribution = item.contributions.find(c => c.user_id === selectedUser.user_id);
+                                        const isContributed = !!contribution;
+
+                                        return (
+                                            <div
+                                                key={item.id}
+                                                className={`grid grid-cols-12 gap-4 
+ p-4 rounded-xl items-center transition-colors ${isContributed
+                                                        ? 'bg-primary-500/10 border border-primary-500/20'
+                                                        : 'opacity-50 hover:opacity-75'
+                                                    }`}
+                                            >
+                                                <div className="col-span-8">
+                                                    <div className={`font-medium ${isContributed ? 'text-white' : 'text-slate-400'}`}>
+                                                        {item.name}
+                                                    </div>
+                                                    {item.quantity > 1 && (
+                                                        <div className="text-xs text-slate-500 mt-0.5">Qty: {item.quantity}</div>
+                                                    )}
+                                                </div>
+                                                <div className="col-span-4 text-right">
+                                                    {isContributed ? (
+                                                        <div className="font-mono font-bold text-primary-400">
+                                                            €{((contribution.amount || 0) / 100).toFixed(2)}
+                                                        </div>
+                                                    ) : (
+                                                        <div className="text-xs text-slate-600 font-medium italic">
+                                                            Not claimed
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
                         </div>
                     </div>
                 )}

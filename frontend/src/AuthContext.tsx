@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import api from './api';
 
 interface AuthContextType {
-    user: { username: string; id: number } | null;
+    user: { username: string; id: number; color?: string } | null;
     loading: boolean;
     login: (username: string, password: string) => Promise<void>;
     register: (username: string, password: string) => Promise<void>;
@@ -12,7 +12,7 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | null>(null);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-    const [user, setUser] = useState<{ username: string; id: number } | null>(null);
+    const [user, setUser] = useState<{ username: string; id: number; color?: string } | null>(null);
     const [loading, setLoading] = useState(true);
 
     const checkUser = async () => {
