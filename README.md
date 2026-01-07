@@ -34,3 +34,14 @@ A self-hosted, AI-powered receipt splitting tool for roommates.
 - **Database**: PostgreSQL
 - **Frontend**: React + Vite + Tailwind CSS
 - **AI**: Google Gemini API
+
+## Updating
+To update the application with the latest changes:
+1. Pull the latest code:
+   ```bash
+   git pull origin main
+   ```
+2. Rebuild and restart containers:
+   ```bash
+   docker-compose up -d --build
+   ```
