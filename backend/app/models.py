@@ -11,6 +11,16 @@ class User(SQLModel, table=True):
     receipts_uploaded: List["Receipt"] = Relationship(back_populates="uploader")
     contributions: List["Contribution"] = Relationship(back_populates="user")
     participations: List["ReceiptParticipant"] = Relationship(back_populates="user")
+    notifications: List["Notification"] = Relationship(back_populates="user")
+
+class Notification(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id")
+    message: str
+    read: bool = Field(default=False)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    user: User = Relationship(back_populates="notifications")
 
 class Receipt(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -19,11 +29,18 @@ class Receipt(SQLModel, table=True):
     description: Optional[str] = None
     total_amount: int = 0  # In cents
     status: str = Field(default="pending")  # pending, split, archived
+    mismatch: bool = Field(default=False)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
     uploader: User = Relationship(back_populates="receipts_uploaded")
-    items: List["Item"] = Relationship(back_populates="receipt")
-    participants: List["ReceiptParticipant"] = Relationship(back_populates="receipt")
+    items: List["Item"] = Relationship(
+        back_populates="receipt",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"}
+    )
+    participants: List["ReceiptParticipant"] = Relationship(
+        back_populates="receipt",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"}
+    )
 
 class ReceiptParticipant(SQLModel, table=True):
     receipt_id: int = Field(foreign_key="receipt.id", primary_key=True)
@@ -40,7 +57,10 @@ class Item(SQLModel, table=True):
     quantity: int = 1
 
     receipt: Receipt = Relationship(back_populates="items")
-    contributions: List["Contribution"] = Relationship(back_populates="item")
+    contributions: List["Contribution"] = Relationship(
+        back_populates="item",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"}
+    )
 
 class Contribution(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -55,3 +75,4 @@ User.update_forward_refs()
 Receipt.update_forward_refs()
 Item.update_forward_refs()
 Contribution.update_forward_refs()
+Notification.update_forward_refs()

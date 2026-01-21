@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import api from './api';
 import { useAuth } from './AuthContext';
-import { Plus, Receipt as ReceiptIcon, Archive, LogOut, ChevronRight, Image as ImageIcon, User } from 'lucide-react';
+import { Plus, Receipt as ReceiptIcon, Archive, LogOut, ChevronRight, Image as ImageIcon, User, Bell } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
 interface Receipt {
@@ -16,6 +16,8 @@ export const Dashboard: React.FC = () => {
     const [receipts, setReceipts] = useState<Receipt[]>([]);
     const [showArchived, setShowArchived] = useState(false);
     const { user, logout } = useAuth();
+    const [notifications, setNotifications] = useState<any[]>([]);
+    const [showNotifs, setShowNotifs] = useState(false);
 
     const fetchReceipts = async () => {
         try {
@@ -26,8 +28,27 @@ export const Dashboard: React.FC = () => {
         }
     };
 
+    const fetchNotifications = async () => {
+        try {
+            const res = await api.get('/notifications');
+            setNotifications(res.data);
+        } catch (err) {
+            console.error(err);
+        }
+    };
+
+    const markRead = async (id: number) => {
+        try {
+            await api.post(`/notifications/${id}/read`);
+            setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+        } catch (err) {
+            console.error(err);
+        }
+    };
+
     useEffect(() => {
         fetchReceipts();
+        fetchNotifications();
     }, [showArchived]);
 
     return (
@@ -42,6 +63,41 @@ export const Dashboard: React.FC = () => {
                         <span className="font-bold text-xl tracking-tight">GrocerSplit</span>
                     </div>
                     <div className="flex items-center gap-4">
+                        <div className="relative">
+                            <button
+                                onClick={() => setShowNotifs(!showNotifs)}
+                                className="p-2 text-slate-400 hover:text-white transition-colors relative"
+                            >
+                                <Bell className="w-5 h-5" />
+                                {notifications.some(n => !n.read) && (
+                                    <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-rose-500 rounded-full border border-slate-900" />
+                                )}
+                            </button>
+                            {showNotifs && (
+                                <>
+                                    <div className="absolute top-full right-0 mt-2 w-80 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl overflow-hidden z-20 animate-in fade-in zoom-in-95">
+                                        <div className="p-3 border-b border-slate-700 font-bold text-sm text-slate-400">Notifications</div>
+                                        <div className="max-h-64 overflow-y-auto">
+                                            {notifications.length === 0 ? (
+                                                <div className="p-4 text-center text-slate-500 text-sm">No notifications</div>
+                                            ) : (
+                                                notifications.map(n => (
+                                                    <div
+                                                        key={n.id}
+                                                        className={`p-3 border-b border-slate-700/50 text-sm ${n.read ? 'opacity-50' : 'bg-slate-700/30'}`}
+                                                        onClick={() => markRead(n.id)}
+                                                    >
+                                                        <p className="text-slate-200">{n.message}</p>
+                                                        <span className="text-xs text-slate-500 mt-1 block">{new Date(n.created_at).toLocaleDateString()}</span>
+                                                    </div>
+                                                ))
+                                            )}
+                                        </div>
+                                    </div>
+                                    <div className="fixed inset-0 z-10" onClick={() => setShowNotifs(false)} />
+                                </>
+                            )}
+                        </div>
                         <span className="text-sm text-slate-400 hidden sm:block">Hi, {user?.username}</span>
                         <Link
                             to="/profile"

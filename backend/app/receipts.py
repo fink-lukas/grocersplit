@@ -1,13 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from pydantic import BaseModel
 from sqlmodel import Session, select
 from app.database import get_session
-from app.models import User, Receipt, Item, Contribution, ReceiptParticipant
+from app.models import User, Receipt, Item, Contribution, ReceiptParticipant, Notification
 from app.auth import get_current_user
 from app.gemini import parse_receipt
 import shutil
 import os
 import uuid
-from typing import List
+from typing import List, Optional
 
 router = APIRouter(prefix="/api/receipts")
 
@@ -42,7 +43,8 @@ async def upload_receipt(
         image_path=file_path,
         description=description,
         total_amount=parsed_data.get("total", 0),
-        status="pending"
+        status="pending",
+        mismatch=parsed_data.get("mismatch", False)
     )
     db.add(receipt)
     db.commit()
@@ -65,7 +67,36 @@ async def upload_receipt(
         db.add(item)
     
     db.commit()
-    return {"id": receipt.id, "message": "Receipt uploaded and parsed"}
+    return {"id": receipt.id, "message": "Receipt uploaded and parsed", "mismatch": receipt.mismatch}
+
+class ItemCreate(BaseModel):
+    name: str
+    price: int
+    quantity: int
+
+@router.post("/{receipt_id}/items")
+def add_item(
+    receipt_id: int,
+    item_data: ItemCreate,
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    receipt = db.get(Receipt, receipt_id)
+    if not receipt:
+        raise HTTPException(status_code=404, detail="Receipt not found")
+    if receipt.uploader_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Only uploader can add items")
+    
+    item = Item(
+        receipt_id=receipt_id,
+        name=item_data.name,
+        price=item_data.price,
+        quantity=item_data.quantity
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return item
 
 @router.get("")
 def list_receipts(
@@ -129,17 +160,30 @@ def get_receipt(
         ]
     }
 
+class ClaimRequest(BaseModel):
+    quantity: int = 1
+    target_user_id: Optional[int] = None
+
 @router.post("/{receipt_id}/items/{item_id}/claim")
 def claim_item(
     receipt_id: int,
     item_id: int,
-    quantity: int = 1, # How many of this item the user claims
+    data: ClaimRequest = ClaimRequest(),
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
     item = db.get(Item, item_id)
     if not item or item.receipt_id != receipt_id:
         raise HTTPException(status_code=404, detail="Item not found")
+
+    user_to_claim = current_user.id
+    if data.target_user_id is not None:
+        # Permission check: Only uploader can assign to others
+        # Fetch receipt to check uploader
+        receipt = db.get(Receipt, receipt_id)
+        if receipt.uploader_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Only uploader can assign items to others")
+        user_to_claim = data.target_user_id
 
     # For simplicity, if multiple people claim, we split the price equally
     # We create/update the contribution records
@@ -149,19 +193,62 @@ def claim_item(
     existing = db.exec(
         select(Contribution).where(
             Contribution.item_id == item_id,
-            Contribution.user_id == current_user.id
+            Contribution.user_id == user_to_claim
         )
     ).first()
     
     if existing:
         db.delete(existing)
+        # Maybe notify user that they were removed? optional.
     else:
         # Just a placeholder, split happens at "Finalize"
-        contrib = Contribution(item_id=item_id, user_id=current_user.id, amount=0)
+        contrib = Contribution(item_id=item_id, user_id=user_to_claim, amount=0)
         db.add(contrib)
+        
+        # Notify if claimed by someone else
+        if user_to_claim != current_user.id:
+            notif = Notification(
+                user_id=user_to_claim, 
+                message=f"{current_user.username} assigned '{item.name}' to you."
+            )
+            db.add(notif)
     
     db.commit()
     return {"message": "Claim updated"}
+
+class ItemUpdate(BaseModel):
+    name: Optional[str] = None
+    price: Optional[int] = None
+    quantity: Optional[int] = None
+
+@router.put("/{receipt_id}/items/{item_id}")
+def update_item(
+    receipt_id: int,
+    item_id: int,
+    data: ItemUpdate,
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    item = db.get(Item, item_id)
+    if not item or item.receipt_id != receipt_id:
+        raise HTTPException(status_code=404, detail="Item not found")
+    
+    # Check permissions (uploader only)
+    receipt = db.get(Receipt, receipt_id)
+    if receipt.uploader_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Only uploader can edit items")
+        
+    if data.name is not None:
+        item.name = data.name
+    if data.price is not None:
+        item.price = data.price
+    if data.quantity is not None:
+        item.quantity = data.quantity
+        
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return item
 
 @router.post("/{receipt_id}/items/{item_id}/split-quantity")
 def split_item_quantity(

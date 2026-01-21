@@ -2,7 +2,7 @@ from fastapi import FastAPI, Depends, HTTPException, status, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session, select
 from app.database import get_session, init_db
-from app.models import User
+from app.models import User, Notification
 from app.auth import get_password_hash, verify_password, create_access_token, get_current_user
 from app.receipts import router as receipts_router
 from pydantic import BaseModel
@@ -45,7 +45,20 @@ def on_startup():
                 trans.commit()
             except Exception as e:
                 trans.rollback()
-                print(f"Migration failed: {e}")
+                print(f"Migration failed (color): {e}")
+
+        try:
+            conn.execute(text("SELECT mismatch FROM \"receipt\" LIMIT 1"))
+        except Exception:
+            print("Migrating database: Adding mismatch column to receipt table")
+            conn.rollback()
+            trans = conn.begin()
+            try:
+                conn.execute(text("ALTER TABLE \"receipt\" ADD COLUMN mismatch BOOLEAN DEFAULT FALSE"))
+                trans.commit()
+            except Exception as e:
+                trans.rollback()
+                print(f"Migration failed (mismatch): {e}")
 
 class AuthRequest(BaseModel):
     username: str
@@ -113,3 +126,27 @@ def update_me(data: UserUpdate, db: Session = Depends(get_session), current_user
 def list_users(db: Session = Depends(get_session)):
     users = db.exec(select(User)).all()
     return [{"id": u.id, "username": u.username, "color": u.color} for u in users]
+
+@app.get("/api/notifications")
+def list_notifications(
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    statement = select(Notification).where(Notification.user_id == current_user.id).order_by(Notification.created_at.desc())
+    notifs = db.exec(statement).all()
+    return notifs
+
+@app.post("/api/notifications/{notif_id}/read")
+def mark_notification_read(
+    notif_id: int,
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    notif = db.get(Notification, notif_id)
+    if not notif or notif.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    
+    notif.read = True
+    db.add(notif)
+    db.commit()
+    return {"message": "Marked as read"}

@@ -2,7 +2,7 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import api from './api';
 import { useAuth } from './AuthContext';
-import { ArrowLeft, Check, Users, ShieldCheck, Archive as ArchiveIcon, Loader2, Info, Trash2, RotateCcw, Eye, EyeOff, X } from 'lucide-react';
+import { ArrowLeft, Check, Users, ShieldCheck, Archive as ArchiveIcon, Loader2, Info, Trash2, RotateCcw, Eye, EyeOff, X, AlertTriangle, Plus, Pencil, Save, UserPlus } from 'lucide-react';
 
 interface Contribution {
     user_id: number;
@@ -27,6 +27,7 @@ interface ReceiptData {
         status: string;
         uploader_id: number;
         image_path: string;
+        mismatch: boolean;
     };
     items: Item[];
     participants: any[];
@@ -40,6 +41,12 @@ export const ReceiptDetails: React.FC = () => {
     const [selectedUser, setSelectedUser] = useState<{ user_id: number; name: string; amount: number } | null>(null);
     const { user } = useAuth();
     const navigate = useNavigate();
+
+    const [showAddForm, setShowAddForm] = useState(false);
+    const [newItem, setNewItem] = useState({ name: '', price: '', quantity: '1' });
+    const [editingItem, setEditingItem] = useState<number | null>(null);
+    const [editForm, setEditForm] = useState({ name: '', price: '', quantity: '' });
+    const [assigningItem, setAssigningItem] = useState<number | null>(null);
 
     const fetchData = async () => {
         try {
@@ -56,9 +63,10 @@ export const ReceiptDetails: React.FC = () => {
         fetchData();
     }, [id]);
 
-    const handleClaim = async (itemId: number) => {
+    const handleClaim = async (itemId: number, userId?: number) => {
         try {
-            await api.post(`/receipts/${id}/items/${itemId}/claim`);
+            await api.post(`/receipts/${id}/items/${itemId}/claim`, userId ? { target_user_id: userId } : {});
+            setAssigningItem(null);
             fetchData();
         } catch (err) {
             alert('Failed to update claim');
@@ -111,6 +119,44 @@ export const ReceiptDetails: React.FC = () => {
             alert('Failed to revert receipt');
         }
     };
+    const handleAddItem = async (e: React.FormEvent) => {
+        e.preventDefault();
+        try {
+            await api.post(`/receipts/${id}/items`, {
+                name: newItem.name,
+                price: Math.round(parseFloat(newItem.price) * 100),
+                quantity: parseInt(newItem.quantity)
+            });
+            setShowAddForm(false);
+            setNewItem({ name: '', price: '', quantity: '1' });
+            fetchData();
+        } catch (err) {
+            alert('Failed to add item');
+        }
+    };
+
+    const handleUpdateItem = async (itemId: number) => {
+        try {
+            await api.put(`/receipts/${id}/items/${itemId}`, {
+                name: editForm.name,
+                price: Math.round(parseFloat(editForm.price) * 100),
+                quantity: parseInt(editForm.quantity)
+            });
+            setEditingItem(null);
+            fetchData();
+        } catch (err) {
+            alert('Failed to update item');
+        }
+    };
+
+    const startEditing = (item: Item) => {
+        setEditingItem(item.id);
+        setEditForm({
+            name: item.name,
+            price: (item.price / 100).toFixed(2),
+            quantity: item.quantity.toString()
+        });
+    };
 
     // Calculate totals for summary
     const totals = useMemo(() => {
@@ -146,6 +192,9 @@ export const ReceiptDetails: React.FC = () => {
     const isUploader = user?.id === receipt.uploader_id;
     const allClaimed = items.every(i => i.contributions.length > 0);
     const imageUrl = `/api/uploads/${receipt.image_path.split('/').pop()}`;
+
+    const itemsSum = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+    const mismatch = receipt.mismatch || itemsSum !== receipt.total_amount;
 
     return (
         <div className="min-h-screen bg-slate-900 text-slate-100 p-4 sm:p-8 pb-32">
@@ -239,7 +288,7 @@ export const ReceiptDetails: React.FC = () => {
                 )}
 
                 {!allClaimed && receipt.status === 'pending' && (
-                    <div className="bg-amber-500/10 border border-amber-500/20 p-4 rounded-2xl flex gap-3 mb-8">
+                    <div className="bg-amber-500/10 border border-amber-500/20 p-4 rounded-2xl flex gap-3 mb-4">
                         <Info className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
                         <p className="text-sm text-amber-200/80">
                             Some items are not yet claimed. Every item must be claimed by at least one person before the receipt can be finalized.
@@ -247,25 +296,147 @@ export const ReceiptDetails: React.FC = () => {
                     </div>
                 )}
 
+                {(mismatch || receipt.mismatch) && receipt.status === 'pending' && (
+                    <div className="bg-rose-500/10 border border-rose-500/20 p-4 rounded-2xl flex gap-3 mb-8">
+                        <AlertTriangle className="w-5 h-5 text-rose-500 shrink-0 mt-0.5" />
+                        <div>
+                            <p className="text-sm font-bold text-rose-200">Gemini Mismatch Warning</p>
+                            <p className="text-xs text-rose-200/80 mb-2">
+                                The sum of extracted items does not match the receipt total. Gemini might have missed some items or misread prices. Please review carefully and add missing items manually.
+                            </p>
+                            <div className="flex items-center gap-4 text-xs font-mono bg-rose-950/30 p-2 rounded-lg border border-rose-500/20">
+                                <span className="text-rose-200">Items Sum: <span className="font-bold">€{(itemsSum / 100).toFixed(2)}</span></span>
+                                <span className="text-rose-500">Receipt Total: <span className="font-bold">€{(receipt.total_amount / 100).toFixed(2)}</span></span>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
                 <div className="bg-slate-800 rounded-3xl border border-slate-700 overflow-hidden shadow-2xl">
                     <div className="p-4 sm:p-6 border-b border-slate-700 bg-slate-800/50 flex items-center justify-between text-sm font-medium text-slate-400 uppercase tracking-wider">
-                        <span>Item</span>
-                        <div className="flex gap-4 sm:gap-12">
+                        <span>Items List</span>
+                        <div className="flex gap-4 sm:gap-12 items-center">
+                            {receipt.status === 'pending' && isUploader && (
+                                <button
+                                    onClick={() => setShowAddForm(!showAddForm)}
+                                    className="flex items-center gap-1 text-[10px] bg-primary-600/20 hover:bg-primary-600/30 text-primary-400 px-2 py-1 rounded-md border border-primary-500/30 transition-all mr-4"
+                                >
+                                    <Plus className="w-3 h-3" />
+                                    Add Item
+                                </button>
+                            )}
                             <span className="w-20 text-right">Price</span>
                             <span className="w-12 sm:w-24 text-center">Status</span>
                         </div>
                     </div>
+
+                    {showAddForm && (
+                        <form onSubmit={handleAddItem} className="p-4 sm:p-6 bg-slate-900/50 border-b border-slate-700/50 flex flex-wrap gap-4 items-end">
+                            <div className="flex-1 min-w-[200px]">
+                                <label className="block text-[10px] uppercase text-slate-500 font-bold mb-1">Item Name</label>
+                                <input
+                                    required
+                                    type="text"
+                                    placeholder="e.g. Bananas"
+                                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary-500"
+                                    value={newItem.name}
+                                    onChange={e => setNewItem({ ...newItem, name: e.target.value })}
+                                />
+                            </div>
+                            <div className="w-24">
+                                <label className="block text-[10px] uppercase text-slate-500 font-bold mb-1">Price (€)</label>
+                                <input
+                                    required
+                                    type="number"
+                                    step="0.01"
+                                    placeholder="0.00"
+                                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary-500"
+                                    value={newItem.price}
+                                    onChange={e => setNewItem({ ...newItem, price: e.target.value })}
+                                />
+                            </div>
+                            <div className="w-20">
+                                <label className="block text-[10px] uppercase text-slate-500 font-bold mb-1">Qty</label>
+                                <input
+                                    required
+                                    type="number"
+                                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary-500"
+                                    value={newItem.quantity}
+                                    onChange={e => setNewItem({ ...newItem, quantity: e.target.value })}
+                                />
+                            </div>
+                            <button type="submit" className="bg-primary-600 hover:bg-primary-500 text-white px-4 py-2 rounded-lg font-bold text-sm h-[38px] transition-colors">
+                                Add
+                            </button>
+                        </form>
+                    )}
                     <div className="divide-y divide-slate-700/50">
                         {items.map((item) => {
                             const myClaim = item.contributions.some(c => c.user_id === user?.id);
+                            const isEditing = editingItem === item.id;
+
+                            if (isEditing) {
+                                return (
+                                    <div key={item.id} className="p-4 sm:p-6 bg-slate-800/80 flex flex-wrap gap-4 items-end animate-in fade-in">
+                                        <div className="flex-1 min-w-[200px]">
+                                            <label className="block text-[10px] uppercase text-slate-500 font-bold mb-1">Item Name</label>
+                                            <input
+                                                type="text"
+                                                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary-500"
+                                                value={editForm.name}
+                                                onChange={e => setEditForm({ ...editForm, name: e.target.value })}
+                                            />
+                                        </div>
+                                        <div className="w-24">
+                                            <label className="block text-[10px] uppercase text-slate-500 font-bold mb-1">Price (€)</label>
+                                            <input
+                                                type="number"
+                                                step="0.01"
+                                                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary-500"
+                                                value={editForm.price}
+                                                onChange={e => setEditForm({ ...editForm, price: e.target.value })}
+                                            />
+                                        </div>
+                                        <div className="w-20">
+                                            <label className="block text-[10px] uppercase text-slate-500 font-bold mb-1">Qty</label>
+                                            <input
+                                                type="number"
+                                                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary-500"
+                                                value={editForm.quantity}
+                                                onChange={e => setEditForm({ ...editForm, quantity: e.target.value })}
+                                            />
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <button onClick={() => handleUpdateItem(item.id)} className="p-2 bg-green-600 hover:bg-green-500 text-white rounded-lg">
+                                                <Save className="w-5 h-5" />
+                                            </button>
+                                            <button onClick={() => setEditingItem(null)} className="p-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg">
+                                                <X className="w-5 h-5" />
+                                            </button>
+                                        </div>
+                                    </div>
+                                );
+                            }
+
                             return (
                                 <div
                                     key={item.id}
-                                    className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 sm:p-6 transition-all ${myClaim ? 'bg-primary-500/5' : 'hover:bg-white/5'
+                                    className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 sm:p-6 transition-all group ${myClaim ? 'bg-primary-500/5' : 'hover:bg-white/5'
                                         }`}
                                 >
                                     <div className="flex-1 mb-4 sm:mb-0">
-                                        <h4 className="font-semibold text-lg text-white mb-1">{item.name}</h4>
+                                        <div className="flex items-center gap-3">
+                                            <h4 className="font-semibold text-lg text-white mb-1">{item.name}</h4>
+                                            {isUploader && receipt.status === 'pending' && (
+                                                <button
+                                                    onClick={() => startEditing(item)}
+                                                    className="opacity-0 group-hover:opacity-100 transition-opacity p-1 text-slate-500 hover:text-white"
+                                                >
+                                                    <Pencil className="w-4 h-4" />
+                                                </button>
+                                            )}
+                                        </div>
+
                                         {item.quantity > 1 && (
                                             <div className="flex items-center gap-2 mt-1">
                                                 <span className="text-xs text-slate-500 bg-slate-900 px-2 py-0.5 rounded-md border border-slate-700">
@@ -300,17 +471,55 @@ export const ReceiptDetails: React.FC = () => {
                                         <span className="w-20 text-left sm:text-right font-mono font-bold text-white">
                                             €{((item.price * item.quantity) / 100).toFixed(2)}
                                         </span>
-                                        <div className="w-12 sm:w-24 flex justify-center">
+                                        <div className="w-12 sm:w-24 flex justify-center relative">
                                             {receipt.status === 'pending' ? (
-                                                <button
-                                                    onClick={() => handleClaim(item.id)}
-                                                    className={`p-3 rounded-2xl transition-all border-2 ${myClaim
-                                                        ? 'bg-primary-600 border-primary-500 text-white shadow-lg shadow-primary-600/30'
-                                                        : 'bg-slate-900 border-slate-700 text-slate-400 hover:bg-slate-800 hover:border-slate-500 hover:text-white'
-                                                        }`}
-                                                >
-                                                    <Check className={`w-5 h-5 ${myClaim ? 'stroke-[3px]' : ''}`} />
-                                                </button>
+                                                <div className="flex gap-2">
+                                                    {isUploader && (
+                                                        <div className="relative">
+                                                            <button
+                                                                onClick={() => setAssigningItem(assigningItem === item.id ? null : item.id)}
+                                                                className={`p-3 rounded-2xl transition-all border-2 bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-500 hover:text-white`}
+                                                                title="Assign to someone"
+                                                            >
+                                                                <UserPlus className="w-5 h-5" />
+                                                            </button>
+                                                            {assigningItem === item.id && (
+                                                                <div className="absolute top-full right-0 mt-2 z-20 w-48 bg-slate-800 border border-slate-700 rounded-xl shadow-xl overflow-hidden animate-in fade-in zoom-in-95">
+                                                                    <div className="p-2 text-[10px] uppercase font-bold text-slate-500">Assign To:</div>
+                                                                    {data.participants.map(p => {
+                                                                        const claimed = item.contributions.some(c => c.user_id === p.user_id);
+                                                                        return (
+                                                                            <button
+                                                                                key={p.user_id}
+                                                                                onClick={() => handleClaim(item.id, p.user_id)}
+                                                                                className={`w-full text-left px-4 py-2 text-sm flex items-center gap-2 hover:bg-slate-700 ${claimed ? 'text-primary-400' : 'text-slate-300'}`}
+                                                                            >
+                                                                                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: p.color }} />
+                                                                                <span>{p.username}</span>
+                                                                                {claimed && <Check className="w-3 h-3 ml-auto" />}
+                                                                            </button>
+                                                                        )
+                                                                    })}
+                                                                </div>
+                                                            )}
+                                                            {assigningItem === item.id && (
+                                                                <div
+                                                                    className="fixed inset-0 z-10"
+                                                                    onClick={() => setAssigningItem(null)}
+                                                                />
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                    <button
+                                                        onClick={() => handleClaim(item.id)}
+                                                        className={`p-3 rounded-2xl transition-all border-2 ${myClaim
+                                                            ? 'bg-primary-600 border-primary-500 text-white shadow-lg shadow-primary-600/30'
+                                                            : 'bg-slate-900 border-slate-700 text-slate-400 hover:bg-slate-800 hover:border-slate-500 hover:text-white'
+                                                            }`}
+                                                    >
+                                                        <Check className={`w-5 h-5 ${myClaim ? 'stroke-[3px]' : ''}`} />
+                                                    </button>
+                                                </div>
                                             ) : (
                                                 item.contributions.find(c => c.user_id === user?.id) && (
                                                     <div className="bg-green-500/20 text-green-500 p-2 rounded-xl">
