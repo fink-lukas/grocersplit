@@ -306,6 +306,7 @@ export const ReceiptDetails: React.FC = () => {
                             </p>
                             <div className="flex items-center gap-4 text-xs font-mono bg-rose-950/30 p-2 rounded-lg border border-rose-500/20">
                                 <span className="text-rose-200">Items Sum: <span className="font-bold">€{(itemsSum / 100).toFixed(2)}</span></span>
+                                <span className="text-rose-200">Items Found: <span className="font-bold">{items.length}</span></span>
                                 <span className="text-rose-500">Receipt Total: <span className="font-bold">€{(receipt.total_amount / 100).toFixed(2)}</span></span>
                             </div>
                         </div>
