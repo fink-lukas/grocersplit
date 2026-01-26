@@ -9,6 +9,8 @@ import shutil
 import os
 import uuid
 from typing import List, Optional
+from app.notifications_ha import send_ha_notification
+import asyncio
 
 router = APIRouter(prefix="/api/receipts")
 
@@ -67,6 +69,27 @@ async def upload_receipt(
         db.add(item)
     
     db.commit()
+
+    # Calculate individual amounts for validation logic (if needed) or just notify
+    # Trigger notifications asynchronously
+    # We need to fetch usernames for ids
+    users = db.exec(select(User).where(User.id.in_(ids))).all()
+    for user in users:
+        if user.id != current_user.id:
+            asyncio.create_task(
+                send_ha_notification(
+                    target_user=user.username,
+                    event_type="new_receipt",
+                    message=f"{current_user.username} uploaded a new receipt. Total: €{receipt.total_amount/100:.2f}",
+                    data={
+                        "receipt_id": receipt.id, 
+                        "amount": receipt.total_amount,
+                        "description": receipt.description,
+                        "total": receipt.total_amount
+                    }
+                )
+            )
+
     return {"id": receipt.id, "message": "Receipt uploaded and parsed", "mismatch": receipt.mismatch}
 
 class ItemCreate(BaseModel):
@@ -165,7 +188,7 @@ class ClaimRequest(BaseModel):
     target_user_id: Optional[int] = None
 
 @router.post("/{receipt_id}/items/{item_id}/claim")
-def claim_item(
+async def claim_item(
     receipt_id: int,
     item_id: int,
     data: ClaimRequest = ClaimRequest(),
@@ -197,6 +220,11 @@ def claim_item(
         )
     ).first()
     
+    
+    # Capture data before commit to avoid expiration issues
+    item_name = item.name
+    item_price = item.price
+    
     if existing:
         db.delete(existing)
         # Maybe notify user that they were removed? optional.
@@ -209,11 +237,30 @@ def claim_item(
         if user_to_claim != current_user.id:
             notif = Notification(
                 user_id=user_to_claim, 
-                message=f"{current_user.username} assigned '{item.name}' to you."
+                message=f"{current_user.username} assigned '{item_name}' to you."
             )
             db.add(notif)
     
     db.commit()
+
+    # Notify if claimed by someone else (assignment)
+    if user_to_claim != current_user.id:
+        target_user_obj = db.get(User, user_to_claim) 
+        if target_user_obj:
+            asyncio.create_task(
+                send_ha_notification(
+                    target_user=target_user_obj.username,
+                    event_type="item_assigned",
+                    message=f"{current_user.username} assigned '{item_name}' (Price: €{item_price/100:.2f}) to you.",
+                    data={
+                        "receipt_id": receipt_id, 
+                        "item_id": item_id, 
+                        "item_name": item_name,
+                        "price": item_price
+                    }
+                )
+            )
+
     return {"message": "Claim updated"}
 
 class ItemUpdate(BaseModel):
