@@ -114,10 +114,9 @@ export const UploadPage: React.FC = () => {
                     {/* Description */}
                     <div className="space-y-4">
                         <label className="block text-sm font-medium text-slate-400 uppercase tracking-wider">Description (Optional)</label>
-                        <input
-                            type="text"
+                        <textarea
                             placeholder="E.g., Weekly supermarket run"
-                            className="w-full px-6 py-4 bg-slate-800 border border-slate-700 rounded-2xl text-white focus:ring-2 focus:ring-primary-500 outline-none transition-all placeholder:text-slate-600"
+                            className="w-full px-6 py-4 bg-slate-800 border border-slate-700 rounded-2xl text-white focus:ring-2 focus:ring-primary-500 outline-none transition-all placeholder:text-slate-600 resize-none h-32"
                             value={description}
                             onChange={(e) => setDescription(e.target.value)}
                         />
@@ -136,8 +135,8 @@ export const UploadPage: React.FC = () => {
                                     type="button"
                                     onClick={() => toggleUser(user.id)}
                                     className={`px-4 py-2 rounded-xl border font-medium transition-all ${selectedUsers.includes(user.id)
-                                            ? 'bg-primary-600 border-primary-500 text-white shadow-lg shadow-primary-600/20'
-                                            : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'
+                                        ? 'bg-primary-600 border-primary-500 text-white shadow-lg shadow-primary-600/20'
+                                        : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'
                                         }`}
                                 >
                                     {user.username}

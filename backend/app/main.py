@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session, select
 from app.database import get_session, init_db
 from app.models import User, Notification
-from app.auth import get_password_hash, verify_password, create_access_token, get_current_user
+from app.auth import get_password_hash, verify_password, create_access_token, create_refresh_token, get_current_user
 from app.receipts import router as receipts_router
 from pydantic import BaseModel
 from typing import List, Optional
@@ -92,19 +92,72 @@ def login(data: AuthRequest, response: Response, db: Session = Depends(get_sessi
         raise HTTPException(status_code=401, detail="Incorrect username or password")
     
     access_token = create_access_token(data={"sub": user.username})
+    refresh_token = create_refresh_token(data={"sub": user.username})
+
+    # Access token: short-lived, accessible
     response.set_cookie(
         key="access_token",
         value=access_token,
         httponly=True,
-        max_age=10080 * 60,  # 7 days
+        max_age=15 * 60,  # 15 minutes
         samesite="lax",
-        secure=False, # Important for localhost http
+        secure=False,
+    )
+
+    # Refresh token: long-lived, HttpOnly, specific path
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        max_age=30 * 24 * 60 * 60,  # 30 days
+        samesite="lax",
+        secure=False,
+        path="/api/auth/refresh", 
     )
     return {"message": "Logged in successfully", "username": user.username}
+
+@app.post("/api/auth/refresh")
+def refresh_token(request: Request, response: Response, db: Session = Depends(get_session)):
+    refresh_token = request.cookies.get("refresh_token")
+    if not refresh_token:
+        raise HTTPException(status_code=401, detail="Refresh token missing")
+
+    from app.auth import SECRET_KEY, ALGORITHM
+    from jose import jwt, JWTError
+    
+    try:
+        payload = jwt.decode(refresh_token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        token_type: str = payload.get("type")
+        if username is None or token_type != "refresh":
+             raise HTTPException(status_code=401, detail="Invalid refresh token")
+        
+        # Verify user still exists
+        statement = select(User).where(User.username == username)
+        user = db.exec(statement).first()
+        if user is None:
+            raise HTTPException(status_code=401, detail="User not found")
+
+        # Create new access token
+        access_token = create_access_token(data={"sub": user.username})
+        
+        response.set_cookie(
+            key="access_token",
+            value=access_token,
+            httponly=True,
+            max_age=15 * 60,  # 15 minutes
+            samesite="lax",
+            secure=False,
+        )
+        return {"message": "Token refreshed"}
+
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
 
 @app.post("/api/auth/logout")
 def logout(response: Response):
     response.delete_cookie("access_token")
+    response.delete_cookie("refresh_token", path="/api/auth/refresh")
     return {"message": "Logged out successfully"}
 
 @app.get("/api/auth/me")

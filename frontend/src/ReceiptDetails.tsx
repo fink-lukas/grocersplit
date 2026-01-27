@@ -313,7 +313,7 @@ export const ReceiptDetails: React.FC = () => {
                     </div>
                 )}
 
-                <div className="bg-slate-800 rounded-3xl border border-slate-700 overflow-hidden shadow-2xl">
+                <div className="bg-slate-800 rounded-3xl border border-slate-700 shadow-2xl">
                     <div className="p-4 sm:p-6 border-b border-slate-700 bg-slate-800/50 flex items-center justify-between text-sm font-medium text-slate-400 uppercase tracking-wider">
                         <span>Items List</span>
                         <div className="flex gap-4 sm:gap-12 items-center">
@@ -372,7 +372,7 @@ export const ReceiptDetails: React.FC = () => {
                         </form>
                     )}
                     <div className="divide-y divide-slate-700/50">
-                        {items.map((item) => {
+                        {items.map((item, index: number) => {
                             const myClaim = item.contributions.some(c => c.user_id === user?.id);
                             const isEditing = editingItem === item.id;
 
@@ -485,7 +485,8 @@ export const ReceiptDetails: React.FC = () => {
                                                                 <UserPlus className="w-5 h-5" />
                                                             </button>
                                                             {assigningItem === item.id && (
-                                                                <div className="absolute top-full right-0 mt-2 z-20 w-48 bg-slate-800 border border-slate-700 rounded-xl shadow-xl overflow-hidden animate-in fade-in zoom-in-95">
+                                                                <div className={`absolute right-0 z-20 w-48 bg-slate-800 border border-slate-700 rounded-xl shadow-xl overflow-hidden animate-in fade-in zoom-in-95 ${items.length > 2 && index >= items.length - 2 ? 'bottom-full mb-2' : 'top-full mt-2'
+                                                                    }`}>
                                                                     <div className="p-2 text-[10px] uppercase font-bold text-slate-500">Assign To:</div>
                                                                     {data.participants.map(p => {
                                                                         const claimed = item.contributions.some(c => c.user_id === p.user_id);

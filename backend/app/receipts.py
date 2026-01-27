@@ -233,33 +233,25 @@ async def claim_item(
         contrib = Contribution(item_id=item_id, user_id=user_to_claim, amount=0)
         db.add(contrib)
         
-        # Notify if claimed by someone else
+        # Notify if claimed by someone else (assignment)
         if user_to_claim != current_user.id:
-            notif = Notification(
-                user_id=user_to_claim, 
-                message=f"{current_user.username} assigned '{item_name}' to you."
-            )
-            db.add(notif)
+            target_user_obj = db.get(User, user_to_claim) 
+            if target_user_obj:
+                asyncio.create_task(
+                    send_ha_notification(
+                        target_user=target_user_obj.username,
+                        event_type="item_assigned",
+                        message=f"{current_user.username} assigned '{item_name}' (Price: €{item_price/100:.2f}) to you.",
+                        data={
+                            "receipt_id": receipt_id, 
+                            "item_id": item_id, 
+                            "item_name": item_name,
+                            "price": item_price
+                        }
+                    )
+                )
     
     db.commit()
-
-    # Notify if claimed by someone else (assignment)
-    if user_to_claim != current_user.id:
-        target_user_obj = db.get(User, user_to_claim) 
-        if target_user_obj:
-            asyncio.create_task(
-                send_ha_notification(
-                    target_user=target_user_obj.username,
-                    event_type="item_assigned",
-                    message=f"{current_user.username} assigned '{item_name}' (Price: €{item_price/100:.2f}) to you.",
-                    data={
-                        "receipt_id": receipt_id, 
-                        "item_id": item_id, 
-                        "item_name": item_name,
-                        "price": item_price
-                    }
-                )
-            )
 
     return {"message": "Claim updated"}
 
