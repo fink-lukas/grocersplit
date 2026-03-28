@@ -15,6 +15,7 @@ export const UploadPage: React.FC = () => {
     const [availableUsers, setAvailableUsers] = useState<User[]>([]);
     const [selectedUsers, setSelectedUsers] = useState<number[]>([]);
     const [loading, setLoading] = useState(false);
+    const [errorMsg, setErrorMsg] = useState<string | null>(null);
     const navigate = useNavigate();
 
     useEffect(() => {
@@ -56,10 +57,11 @@ export const UploadPage: React.FC = () => {
         formData.append('description', description);
 
         try {
+            setErrorMsg(null);
             await api.post('/receipts/upload', formData);
             navigate('/');
-        } catch (err) {
-            alert('Upload failed');
+        } catch (err: any) {
+            setErrorMsg(err.response?.data?.detail || err.message || 'Upload failed');
         } finally {
             setLoading(false);
         }
@@ -77,6 +79,12 @@ export const UploadPage: React.FC = () => {
                 </button>
 
                 <h1 className="text-3xl font-bold mb-8">Upload Receipt</h1>
+
+                {errorMsg && (
+                    <div className="mb-8 p-4 rounded-xl bg-red-500/10 border border-red-500/20 text-red-500 font-medium">
+                        {errorMsg}
+                    </div>
+                )}
 
                 <form onSubmit={handleSubmit} className="space-y-8">
                     {/* File Upload */}

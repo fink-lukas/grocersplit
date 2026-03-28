@@ -4,7 +4,7 @@ from sqlmodel import Session, select
 from app.database import get_session
 from app.models import User, Receipt, Item, Contribution, ReceiptParticipant, Notification
 from app.auth import get_current_user
-from app.gemini import parse_receipt
+from app.gemini import parse_receipt, ParsingFailed, RateLimitExceeded
 import shutil
 import os
 import uuid
@@ -34,10 +34,19 @@ async def upload_receipt(
         shutil.copyfileobj(file.file, buffer)
     
     # Parse with Gemini
-    parsed_data = parse_receipt(file_path)
-    if not parsed_data:
+    try:
+        parsed_data = parse_receipt(file_path)
+        if not parsed_data:
+            raise ParsingFailed("Failed to parse receipt")
+    except RateLimitExceeded as e:
         os.remove(file_path)
-        raise HTTPException(status_code=500, detail="Failed to parse receipt")
+        raise HTTPException(status_code=429, detail=str(e))
+    except ParsingFailed as e:
+        os.remove(file_path)
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        os.remove(file_path)
+        raise HTTPException(status_code=500, detail="Internal Server Error during parsing.")
     
     # Create Receipt
     receipt = Receipt(
