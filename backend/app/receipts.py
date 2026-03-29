@@ -94,7 +94,8 @@ async def upload_receipt(
                         "receipt_id": receipt.id, 
                         "amount": receipt.total_amount,
                         "description": receipt.description,
-                        "total": receipt.total_amount
+                        "total": receipt.total_amount,
+                        "url": f"{os.getenv('FRONTEND_URL', 'http://localhost:5173').rstrip('/')}/receipt/{receipt.id}"
                     }
                 )
             )
@@ -255,7 +256,8 @@ async def claim_item(
                             "receipt_id": receipt_id, 
                             "item_id": item_id, 
                             "item_name": item_name,
-                            "price": item_price
+                            "price": item_price,
+                            "url": f"{os.getenv('FRONTEND_URL', 'http://192.168.0.69:5173').rstrip('/')}/receipt/{receipt_id}"
                         }
                     )
                 )
