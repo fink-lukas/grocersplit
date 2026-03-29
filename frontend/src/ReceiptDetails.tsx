@@ -194,7 +194,7 @@ export const ReceiptDetails: React.FC = () => {
     const imageUrl = `/api/uploads/${receipt.image_path.split('/').pop()}`;
 
     const itemsSum = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-    const mismatch = receipt.mismatch || itemsSum !== receipt.total_amount;
+    const mismatch = itemsSum !== receipt.total_amount;
 
     return (
         <div className="min-h-screen bg-slate-900 text-slate-100 p-4 sm:p-8 pb-32">
@@ -296,7 +296,7 @@ export const ReceiptDetails: React.FC = () => {
                     </div>
                 )}
 
-                {(mismatch || receipt.mismatch) && receipt.status === 'pending' && (
+                {mismatch && receipt.status === 'pending' && (
                     <div className="bg-rose-500/10 border border-rose-500/20 p-4 rounded-2xl flex gap-3 mb-8">
                         <AlertTriangle className="w-5 h-5 text-rose-500 shrink-0 mt-0.5" />
                         <div>
