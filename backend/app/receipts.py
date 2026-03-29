@@ -9,8 +9,11 @@ import shutil
 import os
 import uuid
 from typing import List, Optional
-from app.notifications_ha import send_ha_notification
-import asyncio
+from fastapi import BackgroundTasks
+from fastapi.concurrency import run_in_threadpool
+from app.services.notification_service import send_ha_notification
+from app.services.receipt_service import finalize_receipt_splits, split_item_quantity
+from app.core.config import settings
 
 router = APIRouter(prefix="/api/receipts")
 
@@ -19,33 +22,38 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 @router.post("/upload")
 async def upload_receipt(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     participant_ids: str = Form(...), # Comma separated IDs
     description: str = Form(None),
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
-    # Save file
+    # Save file and parse in a threadpool to avoid blocking event loop
     file_ext = os.path.splitext(file.filename)[1]
     file_name = f"{uuid.uuid4()}{file_ext}"
     file_path = os.path.join(UPLOAD_DIR, file_name)
     
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    file_content = await file.read()
     
-    # Parse with Gemini
+    def save_and_parse():
+        with open(file_path, "wb") as buffer:
+            buffer.write(file_content)
+        return parse_receipt(file_path)
+    
+    # Parse with Gemini (non-blocking thread)
     try:
-        parsed_data = parse_receipt(file_path)
+        parsed_data = await run_in_threadpool(save_and_parse)
         if not parsed_data:
             raise ParsingFailed("Failed to parse receipt")
     except RateLimitExceeded as e:
-        os.remove(file_path)
+        if os.path.exists(file_path): os.remove(file_path)
         raise HTTPException(status_code=429, detail=str(e))
     except ParsingFailed as e:
-        os.remove(file_path)
+        if os.path.exists(file_path): os.remove(file_path)
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
-        os.remove(file_path)
+        if os.path.exists(file_path): os.remove(file_path)
         raise HTTPException(status_code=500, detail="Internal Server Error during parsing.")
     
     # Create Receipt
@@ -63,6 +71,11 @@ async def upload_receipt(
     
     # Add Participants
     ids = [int(i.strip()) for i in participant_ids.split(",") if i.strip()]
+    
+    # Always ensure the uploader themselves is a participant automatically
+    if current_user.id not in ids:
+        ids.append(current_user.id)
+        
     for uid in ids:
         part = ReceiptParticipant(receipt_id=receipt.id, user_id=uid)
         db.add(part)
@@ -80,24 +93,22 @@ async def upload_receipt(
     db.commit()
 
     # Calculate individual amounts for validation logic (if needed) or just notify
-    # Trigger notifications asynchronously
-    # We need to fetch usernames for ids
+    # Trigger notifications correctly via background tasks 
     users = db.exec(select(User).where(User.id.in_(ids))).all()
     for user in users:
         if user.id != current_user.id:
-            asyncio.create_task(
-                send_ha_notification(
-                    target_user=user.username,
-                    event_type="new_receipt",
-                    message=f"{current_user.username} uploaded a new receipt. Total: €{receipt.total_amount/100:.2f}",
-                    data={
-                        "receipt_id": receipt.id, 
-                        "amount": receipt.total_amount,
-                        "description": receipt.description,
-                        "total": receipt.total_amount,
-                        "url": f"{os.getenv('FRONTEND_URL', 'http://localhost:5173').rstrip('/')}/receipt/{receipt.id}"
-                    }
-                )
+            background_tasks.add_task(
+                send_ha_notification,
+                target_user=user.username,
+                event_type="new_receipt",
+                message=f"{current_user.username} uploaded a new receipt. Total: €{receipt.total_amount/100:.2f}",
+                data={
+                    "receipt_id": receipt.id, 
+                    "amount": receipt.total_amount,
+                    "description": receipt.description,
+                    "total": receipt.total_amount,
+                    "url": f"{settings.FRONTEND_URL.rstrip('/')}/receipt/{receipt.id}"
+                }
             )
 
     return {"id": receipt.id, "message": "Receipt uploaded and parsed", "mismatch": receipt.mismatch}
@@ -198,9 +209,10 @@ class ClaimRequest(BaseModel):
     target_user_id: Optional[int] = None
 
 @router.post("/{receipt_id}/items/{item_id}/claim")
-async def claim_item(
+def claim_item(
     receipt_id: int,
     item_id: int,
+    background_tasks: BackgroundTasks,
     data: ClaimRequest = ClaimRequest(),
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
@@ -247,19 +259,18 @@ async def claim_item(
         if user_to_claim != current_user.id:
             target_user_obj = db.get(User, user_to_claim) 
             if target_user_obj:
-                asyncio.create_task(
-                    send_ha_notification(
-                        target_user=target_user_obj.username,
-                        event_type="item_assigned",
-                        message=f"{current_user.username} assigned '{item_name}' (Price: €{item_price/100:.2f}) to you.",
-                        data={
-                            "receipt_id": receipt_id, 
-                            "item_id": item_id, 
-                            "item_name": item_name,
-                            "price": item_price,
-                            "url": f"{os.getenv('FRONTEND_URL', 'http://192.168.0.69:5173').rstrip('/')}/receipt/{receipt_id}"
-                        }
-                    )
+                background_tasks.add_task(
+                    send_ha_notification,
+                    target_user=target_user_obj.username,
+                    event_type="item_assigned",
+                    message=f"{current_user.username} assigned '{item_name}' (Price: €{item_price/100:.2f}) to you.",
+                    data={
+                        "receipt_id": receipt_id, 
+                        "item_id": item_id, 
+                        "item_name": item_name,
+                        "price": item_price,
+                        "url": f"{settings.FRONTEND_URL.rstrip('/')}/receipt/{receipt_id}"
+                    }
                 )
     
     db.commit()
@@ -311,19 +322,11 @@ def split_item_quantity(
     if not item or item.receipt_id != receipt_id or item.quantity <= 1:
         raise HTTPException(status_code=400, detail="Cannot split this item")
     
-    # Create a new item with quantity 1
-    new_item = Item(
-        receipt_id=receipt_id,
-        name=item.name,
-        price=item.price,
-        quantity=1
-    )
-    # Reduce original quantity
-    item.quantity -= 1
-    
-    db.add(new_item)
-    db.add(item)
-    db.commit()
+    try:
+        split_item_quantity(item, db)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+        
     return {"message": "Item split"}
 
 @router.post("/{receipt_id}/finalize")
@@ -336,28 +339,11 @@ def finalize_receipt(
     if receipt.uploader_id != current_user.id:
         raise HTTPException(status_code=403, detail="Only the uploader can finalize")
     
-    # Check if all items are claimed
-    for item in receipt.items:
-        if not item.contributions:
-            raise HTTPException(status_code=400, detail=f"Item '{item.name}' is not claimed by anyone")
-    
-    # Calculate splits
-    for item in receipt.items:
-        num_claimants = len(item.contributions)
-        total_price = item.price * item.quantity
+    try:
+        finalize_receipt_splits(receipt, db)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
         
-        base_amount = total_price // num_claimants
-        remainder = total_price % num_claimants
-        
-        for i, contrib in enumerate(item.contributions):
-            contrib.amount = base_amount
-            if i == 0: # First claimant gets the remainder
-                contrib.amount += remainder
-            db.add(contrib)
-    
-    receipt.status = "split"
-    db.add(receipt)
-    db.commit()
     return {"message": "Receipt finalized and split"}
 
 @router.post("/{receipt_id}/archive")

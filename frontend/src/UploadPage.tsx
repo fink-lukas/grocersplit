@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from './api';
+import { useAuth } from './AuthContext';
 import { Upload, X, Users, Loader2, ArrowLeft } from 'lucide-react';
 
 interface User {
@@ -9,6 +10,7 @@ interface User {
 }
 
 export const UploadPage: React.FC = () => {
+    const { user: currentUser } = useAuth();
     const [file, setFile] = useState<File | null>(null);
     const [preview, setPreview] = useState<string | null>(null);
     const [description, setDescription] = useState('');
@@ -137,7 +139,7 @@ export const UploadPage: React.FC = () => {
                             <label className="text-sm font-medium text-slate-400 uppercase tracking-wider">Who was part of this run?</label>
                         </div>
                         <div className="flex flex-wrap gap-3">
-                            {availableUsers.map(user => (
+                            {availableUsers.filter(u => u.id !== currentUser?.id).map(user => (
                                 <button
                                     key={user.id}
                                     type="button"

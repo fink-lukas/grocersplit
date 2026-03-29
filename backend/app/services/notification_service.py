@@ -1,9 +1,7 @@
-
-import os
 import httpx
 import logging
-import asyncio
 from typing import Optional, Dict, Any
+from app.core.config import settings
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -17,14 +15,9 @@ async def send_ha_notification(
 ):
     """
     Sends a notification payload to the Home Assistant webhook.
-    
-    :param target_user: The username of the recipient (to be used by HA automation).
-    :param event_type: The type of event (e.g., 'new_receipt', 'item_assigned').
-    :param message: A human-readable message.
-    :param data: Additional data payload.
     """
-    ha_base_url = os.getenv("HA_BASE_URL")
-    ha_webhook_id = os.getenv("HA_WEBHOOK_ID")
+    ha_base_url = settings.HA_BASE_URL
+    ha_webhook_id = settings.HA_WEBHOOK_ID
 
     if not ha_base_url or not ha_webhook_id:
         logger.warning("Home Assistant configuration missing (HA_BASE_URL or HA_WEBHOOK_ID). Notification skipped.")

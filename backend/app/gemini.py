@@ -1,4 +1,3 @@
-import os
 import time
 import google.generativeai as genai
 from PIL import Image
@@ -6,13 +5,10 @@ import json
 import difflib
 import re
 import threading
-from dotenv import load_dotenv
-
-load_dotenv()
+from app.core.config import settings
 
 # Setup API Key Cycling
-raw_keys = os.getenv("GEMINI_API_KEY", "")
-API_KEYS = [k.strip() for k in raw_keys.split(",") if k.strip()]
+API_KEYS = settings.gemini_api_keys
 if not API_KEYS:
     print("WARNING: No GEMINI_API_KEY found in environment variables.")
 
