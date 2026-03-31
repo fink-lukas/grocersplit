@@ -5,6 +5,7 @@ import json
 import difflib
 import re
 import threading
+import asyncio
 from app.core.config import settings
 
 # Setup API Key Cycling
@@ -35,16 +36,24 @@ if get_current_key():
 
 # Throttler
 last_request_time = 0
-throttle_lock = threading.Lock()
+_throttle_lock = None
+
+def get_throttle_lock():
+    global _throttle_lock
+    if _throttle_lock is None:
+        _throttle_lock = asyncio.Lock()
+    return _throttle_lock
+
 THROTTLE_DELAY = 7.0  # 7 seconds
 
-def wait_for_throttle():
+async def wait_for_throttle():
     global last_request_time
-    with throttle_lock:
+    lock = get_throttle_lock()
+    async with lock:
         now = time.time()
         elapsed = now - last_request_time
         if elapsed < THROTTLE_DELAY:
-            time.sleep(THROTTLE_DELAY - elapsed)
+            await asyncio.sleep(THROTTLE_DELAY - elapsed)
         last_request_time = time.time()
 
 class RateLimitExceeded(Exception):
@@ -53,17 +62,17 @@ class RateLimitExceeded(Exception):
 class ParsingFailed(Exception):
     pass
 
-def generate_with_retry(model, *args, **kwargs):
+async def generate_with_retry(model, *args, **kwargs):
     """
-    Executes model.generate_content with exponential backoff, rate limiting, and API key cycling.
+    Executes model.generate_content_async with exponential backoff, rate limiting, and API key cycling.
     """
     max_retries = 3
     base_delay = 2.0
     
     for attempt in range(max_retries):
-        wait_for_throttle()
+        await wait_for_throttle()
         try:
-            response = model.generate_content(*args, **kwargs)
+            response = await model.generate_content_async(*args, **kwargs)
             return response
         except Exception as e:
             error_msg = str(e).lower()
@@ -76,7 +85,7 @@ def generate_with_retry(model, *args, **kwargs):
                     # No other keys, do exponential backoff
                     delay = base_delay * (2 ** attempt)
                     print(f"Sleeping for {delay}s...")
-                    time.sleep(delay)
+                    await asyncio.sleep(delay)
             else:
                 # Other errors (e.g., 500), just raise
                 raise e
@@ -172,7 +181,7 @@ def slice_image(img, max_height=1000, overlap=200):
         current_y += (max_height - overlap)
     return slices
 
-def parse_receipt(file_path: str):
+async def parse_receipt(file_path: str):
     img = Image.open(file_path)
     model = genai.GenerativeModel('gemini-2.5-flash')
     
@@ -181,7 +190,7 @@ def parse_receipt(file_path: str):
     
     for i, slice_img in enumerate(slices):
         try:
-            ocr_response = generate_with_retry(model, [PROMPT_OCR, slice_img])
+            ocr_response = await generate_with_retry(model, [PROMPT_OCR, slice_img])
             raw_text_parts.append(ocr_response.text)
         except Exception as e:
             print(f"OCR Step Failed for slice {i}: {e}")
@@ -199,7 +208,7 @@ def parse_receipt(file_path: str):
     )
     
     try:
-        parse_response = generate_with_retry(json_model, PROMPT_TEXT_TO_JSON + full_text)
+        parse_response = await generate_with_retry(json_model, PROMPT_TEXT_TO_JSON + full_text)
         data = _get_json_from_response(parse_response)
     except Exception as e:
         print(f"Parsing Step Failed: {e}")

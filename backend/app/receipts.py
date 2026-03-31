@@ -12,7 +12,7 @@ from typing import List, Optional
 from fastapi import BackgroundTasks
 from fastapi.concurrency import run_in_threadpool
 from app.services.notification_service import send_ha_notification
-from app.services.receipt_service import finalize_receipt_splits, split_item_quantity
+from app.services.receipt_service import finalize_receipt_splits, split_item_quantity as svc_split_item
 from app.core.config import settings
 
 router = APIRouter(prefix="/api/receipts")
@@ -30,20 +30,24 @@ async def upload_receipt(
     current_user: User = Depends(get_current_user)
 ):
     # Save file and parse in a threadpool to avoid blocking event loop
-    file_ext = os.path.splitext(file.filename)[1]
+    # Validate extension
+    file_ext = os.path.splitext(file.filename)[1].lower()
+    allowed_exts = {".jpg", ".jpeg", ".png", ".webp"}
+    if file_ext not in allowed_exts:
+        raise HTTPException(status_code=400, detail="Invalid file type. Only JPG, PNG, and WEBP are allowed.")
+
     file_name = f"{uuid.uuid4()}{file_ext}"
     file_path = os.path.join(UPLOAD_DIR, file_name)
     
-    file_content = await file.read()
-    
-    def save_and_parse():
+    def save_file():
         with open(file_path, "wb") as buffer:
-            buffer.write(file_content)
-        return parse_receipt(file_path)
+            shutil.copyfileobj(file.file, buffer)
+            
+    await run_in_threadpool(save_file)
     
-    # Parse with Gemini (non-blocking thread)
+    # Parse with Gemini (async)
     try:
-        parsed_data = await run_in_threadpool(save_and_parse)
+        parsed_data = await parse_receipt(file_path)
         if not parsed_data:
             raise ParsingFailed("Failed to parse receipt")
     except RateLimitExceeded as e:
@@ -57,44 +61,51 @@ async def upload_receipt(
         raise HTTPException(status_code=500, detail="Internal Server Error during parsing.")
     
     # Create Receipt
-    receipt = Receipt(
-        uploader_id=current_user.id,
-        image_path=file_path,
-        description=description,
-        total_amount=parsed_data.get("total", 0),
-        status="pending",
-        mismatch=parsed_data.get("mismatch", False)
-    )
-    db.add(receipt)
-    db.commit()
-    db.refresh(receipt)
-    
-    # Add Participants
-    ids = [int(i.strip()) for i in participant_ids.split(",") if i.strip()]
-    
-    # Always ensure the uploader themselves is a participant automatically
-    if current_user.id not in ids:
-        ids.append(current_user.id)
-        
-    for uid in ids:
-        part = ReceiptParticipant(receipt_id=receipt.id, user_id=uid)
-        db.add(part)
-    
-    # Add Items
-    for item_data in parsed_data.get("items", []):
-        item = Item(
-            receipt_id=receipt.id,
-            name=item_data.get("name"),
-            price=item_data.get("price", 0),
-            quantity=item_data.get("quantity", 1)
+    def save_to_db():
+        receipt = Receipt(
+            uploader_id=current_user.id,
+            image_path=file_path,
+            description=description,
+            total_amount=parsed_data.get("total", 0),
+            status="pending",
+            mismatch=parsed_data.get("mismatch", False)
         )
-        db.add(item)
-    
-    db.commit()
+        db.add(receipt)
+        db.commit()
+        db.refresh(receipt)
+        
+        # Add Participants
+        ids = [int(i.strip()) for i in participant_ids.split(",") if i.strip()]
+        
+        # Always ensure the uploader themselves is a participant automatically
+        if current_user.id not in ids:
+            ids.append(current_user.id)
+            
+        for uid in ids:
+            part = ReceiptParticipant(receipt_id=receipt.id, user_id=uid)
+            db.add(part)
+        
+        # Add Items
+        for item_data in parsed_data.get("items", []):
+            item = Item(
+                receipt_id=receipt.id,
+                name=item_data.get("name"),
+                price=item_data.get("price", 0),
+                quantity=item_data.get("quantity", 1)
+            )
+            db.add(item)
+        
+        db.commit()
+        return receipt, ids
+
+    receipt, ids = await run_in_threadpool(save_to_db)
 
     # Calculate individual amounts for validation logic (if needed) or just notify
     # Trigger notifications correctly via background tasks 
-    users = db.exec(select(User).where(User.id.in_(ids))).all()
+    def get_users():
+        return db.exec(select(User).where(User.id.in_(ids))).all()
+        
+    users = await run_in_threadpool(get_users)
     for user in users:
         if user.id != current_user.id:
             background_tasks.add_task(
@@ -130,6 +141,8 @@ def add_item(
         raise HTTPException(status_code=404, detail="Receipt not found")
     if receipt.uploader_id != current_user.id:
         raise HTTPException(status_code=403, detail="Only uploader can add items")
+    if receipt.status != "pending":
+        raise HTTPException(status_code=400, detail="Can only add items to pending receipts")
     
     item = Item(
         receipt_id=receipt_id,
@@ -298,6 +311,8 @@ def update_item(
     receipt = db.get(Receipt, receipt_id)
     if receipt.uploader_id != current_user.id:
         raise HTTPException(status_code=403, detail="Only uploader can edit items")
+    if receipt.status != "pending":
+        raise HTTPException(status_code=400, detail="Can only edit items of pending receipts")
         
     if data.name is not None:
         item.name = data.name
@@ -312,7 +327,7 @@ def update_item(
     return item
 
 @router.post("/{receipt_id}/items/{item_id}/split-quantity")
-def split_item_quantity(
+def split_item_quantity_endpoint(
     receipt_id: int,
     item_id: int,
     db: Session = Depends(get_session),
@@ -323,7 +338,7 @@ def split_item_quantity(
         raise HTTPException(status_code=400, detail="Cannot split this item")
     
     try:
-        split_item_quantity(item, db)
+        svc_split_item(item, db)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
         
@@ -392,10 +407,16 @@ def delete_receipt(
     if receipt.uploader_id != current_user.id:
         raise HTTPException(status_code=403, detail="Only the uploader can delete")
     
-    # Delete file if exists
-    if os.path.exists(receipt.image_path):
-        os.remove(receipt.image_path)
+    image_path = receipt.image_path
         
     db.delete(receipt)
     db.commit()
+
+    # Delete file if exists
+    if os.path.exists(image_path):
+        try:
+            os.remove(image_path)
+        except OSError:
+            pass # Ignore if file could not be deleted
+            
     return {"message": "Receipt deleted"}
