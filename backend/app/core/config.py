@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import List
+from typing import List, Optional
 import os
 
 class Settings(BaseSettings):
@@ -22,8 +22,13 @@ class Settings(BaseSettings):
     HA_BASE_URL: str
     HA_WEBHOOK_ID: str = ""
 
-    # Gemini API
-    GEMINI_API_KEY: str
+    # Gemini API (Direct SDK)
+    GEMINI_API_KEY: Optional[str] = None
+
+    # New API (OpenAI-compatible) Configuration
+    NEW_API_BASE_URL: Optional[str] = None
+    NEW_API_KEY: Optional[str] = None
+    NEW_API_MODEL: str = "gemini-2.5-flash"
     
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -40,3 +45,4 @@ class Settings(BaseSettings):
         return [k.strip() for k in self.GEMINI_API_KEY.split(",") if k.strip()]
 
 settings = Settings()
+

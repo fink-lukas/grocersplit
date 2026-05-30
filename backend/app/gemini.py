@@ -6,6 +6,9 @@ import difflib
 import re
 import threading
 import asyncio
+import base64
+import io
+import httpx
 from app.core.config import settings
 
 # Setup API Key Cycling
@@ -126,16 +129,79 @@ Important:
 Raw Text:
 """
 
+def pil_image_to_base64(img: Image.Image) -> str:
+    buffered = io.BytesIO()
+    if img.mode in ("RGBA", "P"):
+        img = img.convert("RGB")
+    img.save(buffered, format="JPEG", quality=85)
+    return base64.b64encode(buffered.getvalue()).decode('utf-8')
+
+async def call_new_api(messages: list, response_format: dict = None) -> str:
+    if not settings.NEW_API_BASE_URL or not settings.NEW_API_KEY:
+        raise ParsingFailed("new-api configuration is missing NEW_API_BASE_URL or NEW_API_KEY.")
+    
+    headers = {
+        "Authorization": f"Bearer {settings.NEW_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": settings.NEW_API_MODEL,
+        "messages": messages,
+    }
+    if response_format:
+        payload["response_format"] = response_format
+
+    url = f"{settings.NEW_API_BASE_URL.rstrip('/')}/chat/completions"
+    
+    print(f"Calling new-api at {url} (model: {settings.NEW_API_MODEL})")
+    
+    max_retries = 3
+    base_delay = 2.0
+    
+    for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient(timeout=180.0) as client:
+                response = await client.post(url, headers=headers, json=payload)
+            
+            if response.status_code == 200:
+                res_data = response.json()
+                try:
+                    return res_data["choices"][0]["message"]["content"]
+                except (KeyError, IndexError) as e:
+                    print(f"Malformed response structure from new-api: {res_data}")
+                    raise ParsingFailed(f"Malformed response structure from new-api: {e}")
+                    
+            elif response.status_code == 429:
+                print(f"new-api rate limit hit (429) on attempt {attempt + 1}/{max_retries}")
+                delay = base_delay * (2 ** attempt)
+                print(f"Sleeping for {delay}s...")
+                await asyncio.sleep(delay)
+                continue
+            else:
+                error_detail = response.text
+                print(f"new-api returned status code {response.status_code}: {error_detail}")
+                raise ParsingFailed(f"new-api failed with status {response.status_code}: {error_detail}")
+                
+        except httpx.RequestError as e:
+            print(f"HTTP Request error to new-api on attempt {attempt + 1}/{max_retries}: {type(e).__name__} {repr(e)}")
+            if attempt == max_retries - 1:
+                raise ParsingFailed(f"Failed to connect to new-api: {type(e).__name__} {repr(e)}")
+            delay = base_delay * (2 ** attempt)
+            await asyncio.sleep(delay)
+            
+    raise RateLimitExceeded("new-api rate limits or connection failures exceeded after all retries.")
+
 def _get_json_from_response(response):
     try:
-        content = response.text.strip()
+        content = response if isinstance(response, str) else response.text
+        content = content.strip()
         if content.startswith("```json"):
             content = content[7:-3].strip()
         elif content.startswith("```"):
             content = content[3:-3].strip()
         return json.loads(content)
     except Exception as e:
-        print(f"Error parsing Gemini response: {e}")
+        print(f"Error parsing response: {e}")
         return None
 
 def normalize_line(line):
@@ -183,47 +249,82 @@ def slice_image(img, max_height=1000, overlap=200):
 
 async def parse_receipt(file_path: str):
     img = Image.open(file_path)
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    
+    use_new_api = bool(settings.NEW_API_BASE_URL and settings.NEW_API_KEY)
+    
+    if not use_new_api:
+        if not get_current_key():
+            raise ParsingFailed("No API key configured. Provide either GEMINI_API_KEY or NEW_API_BASE_URL/NEW_API_KEY.")
+        model = genai.GenerativeModel('gemini-2.5-flash')
+        json_model = genai.GenerativeModel(
+            'gemini-2.5-flash',
+            generation_config={"response_mime_type": "application/json"}
+        )
     
     slices = slice_image(img, max_height=1500, overlap=300)
     raw_text_parts = []
     
     for i, slice_img in enumerate(slices):
         try:
-            ocr_response = await generate_with_retry(model, [PROMPT_OCR, slice_img])
-            raw_text_parts.append(ocr_response.text)
+            if use_new_api:
+                base64_img = pil_image_to_base64(slice_img)
+                messages = [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": PROMPT_OCR},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{base64_img}"
+                                }
+                            }
+                        ]
+                    }
+                ]
+                content = await call_new_api(messages)
+                raw_text_parts.append(content)
+            else:
+                ocr_response = await generate_with_retry(model, [PROMPT_OCR, slice_img])
+                raw_text_parts.append(ocr_response.text)
         except Exception as e:
             print(f"OCR Step Failed for slice {i}: {e}")
-            if isinstance(e, RateLimitExceeded):
+            if isinstance(e, (RateLimitExceeded, ParsingFailed)):
                 raise e
+            raise ParsingFailed(f"OCR Step Failed: {e}")
     
     if not len(raw_text_parts):
          raise ParsingFailed("Failed to transcribe any text from the image.")
 
     full_text = stitch_text_parts(raw_text_parts)
     
-    json_model = genai.GenerativeModel(
-        'gemini-2.5-flash',
-        generation_config={"response_mime_type": "application/json"}
-    )
-    
     try:
-        parse_response = await generate_with_retry(json_model, PROMPT_TEXT_TO_JSON + full_text)
-        data = _get_json_from_response(parse_response)
+        if use_new_api:
+            messages = [
+                {
+                    "role": "user",
+                    "content": PROMPT_TEXT_TO_JSON + full_text
+                }
+            ]
+            content = await call_new_api(messages, response_format={"type": "json_object"})
+            data = _get_json_from_response(content)
+        else:
+            parse_response = await generate_with_retry(json_model, PROMPT_TEXT_TO_JSON + full_text)
+            data = _get_json_from_response(parse_response)
     except Exception as e:
         print(f"Parsing Step Failed: {e}")
-        if isinstance(e, RateLimitExceeded):
+        if isinstance(e, (RateLimitExceeded, ParsingFailed)):
             raise e
         raise ParsingFailed("Failed to extract JSON from text.") from e
     
     if not data or not isinstance(data.get("items"), list):
-        raise ParsingFailed("Invalid JSON format returned from Gemini.")
+        raise ParsingFailed("Invalid JSON format returned from API.")
         
     items = data.get("items", [])
     total = data.get("total", 0)
     
     if not items and total == 0:
-        raise ParsingFailed("Gemini returned empty items list and 0 total.")
+        raise ParsingFailed("API returned empty items list and 0 total.")
 
     items_sum = sum(item.get("price", 0) * item.get("quantity", 1) for item in items)
     mismatch = items_sum != total
