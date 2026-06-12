@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     FRONTEND_URL: str = "http://192.168.0.69:5173"
 
     # Home Assistant
-    HA_BASE_URL: str
+    HA_BASE_URL: str = ""
     HA_WEBHOOK_ID: str = ""
 
     # Gemini API (Direct SDK)
