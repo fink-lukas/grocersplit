@@ -2,7 +2,34 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import api from './api';
 import { useAuth } from './AuthContext';
-import { ArrowLeft, Check, Users, ShieldCheck, Archive as ArchiveIcon, Loader2, Info, Trash2, RotateCcw, Eye, EyeOff, X, AlertTriangle, Plus, Pencil, Save, UserPlus } from 'lucide-react';
+import {
+    ArrowLeft,
+    Check,
+    Users,
+    ShieldCheck,
+    Archive as ArchiveIcon,
+    Loader2,
+    Info,
+    Trash2,
+    RotateCcw,
+    Eye,
+    EyeOff,
+    X,
+    AlertTriangle,
+    Plus,
+    Pencil,
+    Save,
+    UserPlus,
+    Tag,
+    Unlink,
+    Percent,
+    CornerDownRight,
+    Calendar,
+    Sparkles,
+    Copy,
+    CheckCheck
+} from 'lucide-react';
+import { ProductMatchModal, type ProductData } from './ProductMatchModal';
 
 interface Contribution {
     user_id: number;
@@ -14,8 +41,16 @@ interface Contribution {
 interface Item {
     id: number;
     name: string;
+    raw_name?: string;
+    sku?: string;
+    item_type?: string;
     price: number;
+    original_price?: number;
+    discount_amount?: number;
     quantity: number;
+    unit?: string;
+    notes?: string;
+    product?: ProductData | null;
     contributions: Contribution[];
 }
 
@@ -23,11 +58,22 @@ interface ReceiptData {
     receipt: {
         id: number;
         description: string;
+        merchant_name?: string;
+        purchase_date?: string;
+        raw_json?: string;
         total_amount: number;
         status: string;
         uploader_id: number;
         image_path: string;
         mismatch: boolean;
+        created_at?: string;
+        uploader?: {
+            id: number;
+            username: string;
+            color: string;
+            is_active: boolean;
+        } | null;
+        can_manage?: boolean;
     };
     items: Item[];
     participants: any[];
@@ -43,10 +89,25 @@ export const ReceiptDetails: React.FC = () => {
     const navigate = useNavigate();
 
     const [showAddForm, setShowAddForm] = useState(false);
-    const [newItem, setNewItem] = useState({ name: '', price: '', quantity: '1' });
+    const [newItem, setNewItem] = useState({ name: '', price: '', quantity: '1', unit: '' });
     const [editingItem, setEditingItem] = useState<number | null>(null);
-    const [editForm, setEditForm] = useState({ name: '', price: '', quantity: '' });
+    const [editForm, setEditForm] = useState({ name: '', price: '', quantity: '', unit: '' });
     const [assigningItem, setAssigningItem] = useState<number | null>(null);
+
+    // Issue #2 & #7: Product catalog matching and discount management
+    const [matchingItem, setMatchingItem] = useState<Item | null>(null);
+    const [attachingDiscountItem, setAttachingDiscountItem] = useState<Item | null>(null);
+
+    // Purchase date inline editing
+    const [editingDate, setEditingDate] = useState(false);
+    const [dateValue, setDateValue] = useState('');
+    const [savingDate, setSavingDate] = useState(false);
+
+    // AI Data modal
+    const [showAiModal, setShowAiModal] = useState(false);
+    const [aiData, setAiData] = useState<any>(null);
+    const [loadingAi, setLoadingAi] = useState(false);
+    const [copiedJson, setCopiedJson] = useState(false);
 
     const fetchData = async () => {
         try {
@@ -119,16 +180,18 @@ export const ReceiptDetails: React.FC = () => {
             alert('Failed to revert receipt');
         }
     };
+
     const handleAddItem = async (e: React.FormEvent) => {
         e.preventDefault();
         try {
             await api.post(`/receipts/${id}/items`, {
                 name: newItem.name,
                 price: Math.round(parseFloat(newItem.price) * 100),
-                quantity: parseInt(newItem.quantity)
+                quantity: parseFloat(newItem.quantity),
+                unit: newItem.unit.trim() || undefined
             });
             setShowAddForm(false);
-            setNewItem({ name: '', price: '', quantity: '1' });
+            setNewItem({ name: '', price: '', quantity: '1', unit: '' });
             fetchData();
         } catch (err) {
             alert('Failed to add item');
@@ -140,7 +203,8 @@ export const ReceiptDetails: React.FC = () => {
             await api.put(`/receipts/${id}/items/${itemId}`, {
                 name: editForm.name,
                 price: Math.round(parseFloat(editForm.price) * 100),
-                quantity: parseInt(editForm.quantity)
+                quantity: parseFloat(editForm.quantity),
+                unit: editForm.unit.trim() || null
             });
             setEditingItem(null);
             fetchData();
@@ -154,8 +218,81 @@ export const ReceiptDetails: React.FC = () => {
         setEditForm({
             name: item.name,
             price: (item.price / 100).toFixed(2),
-            quantity: item.quantity.toString()
+            quantity: item.quantity.toString(),
+            unit: item.unit || ''
         });
+    };
+
+    // Issue #7: Unmatch an item-level discount into a separate line item
+    const handleUnmatchDiscount = async (itemId: number) => {
+        try {
+            await api.post(`/receipts/${id}/items/${itemId}/unmatch-discount`);
+            fetchData();
+        } catch (err: any) {
+            alert(err.response?.data?.detail || 'Failed to unmatch discount');
+        }
+    };
+
+    // Issue #7: Attach a standalone discount to a target product item
+    const handleAttachDiscount = async (discountItemId: number, targetItemId: number) => {
+        try {
+            await api.post(`/receipts/${id}/items/${discountItemId}/attach-discount/${targetItemId}`);
+            setAttachingDiscountItem(null);
+            fetchData();
+        } catch (err: any) {
+            alert(err.response?.data?.detail || 'Failed to attach discount');
+        }
+    };
+
+    // Issue #2: Unlink product catalog link
+    const handleUnlinkProduct = async (itemId: number) => {
+        try {
+            await api.post(`/receipts/${id}/items/${itemId}/unlink-product`);
+            fetchData();
+        } catch (err: any) {
+            alert(err.response?.data?.detail || 'Failed to unlink product');
+        }
+    };
+
+    // Purchase date updating
+    const handleSaveDate = async () => {
+        if (!dateValue) return;
+        setSavingDate(true);
+        try {
+            await api.put(`/receipts/${id}`, {
+                purchase_date: new Date(dateValue).toISOString()
+            });
+            setEditingDate(false);
+            fetchData();
+        } catch (err) {
+            alert('Failed to update purchase date');
+        } finally {
+            setSavingDate(false);
+        }
+    };
+
+    // AI modal loading
+    const handleOpenAiModal = async () => {
+        setShowAiModal(true);
+        if (!aiData) {
+            setLoadingAi(true);
+            try {
+                const res = await api.get(`/receipts/${id}/raw-json`);
+                setAiData(res.data);
+            } catch (err: any) {
+                setAiData({ error: err.response?.data?.detail || 'No raw AI extraction available for this receipt.' });
+            } finally {
+                setLoadingAi(false);
+            }
+        }
+    };
+
+    const handleCopyJson = () => {
+        if (aiData) {
+            navigator.clipboard.writeText(JSON.stringify(aiData, null, 2));
+            setCopiedJson(true);
+            setTimeout(() => setCopiedJson(false), 2500);
+        }
     };
 
     // Calculate totals for summary
@@ -189,11 +326,23 @@ export const ReceiptDetails: React.FC = () => {
     if (!data) return <div className="text-white text-center py-20">Receipt not found</div>;
 
     const { receipt, items } = data;
-    const isUploader = user?.id === receipt.uploader_id;
+    const canManage = Boolean(receipt?.can_manage || user?.id === receipt?.uploader_id);
+    const isUploader = canManage;
+
+    const handleTransferOwnership = async () => {
+        if (!user || !receipt) return;
+        if (!window.confirm(`Transfer ownership of this receipt to you (${user.username})? Historical claims will remain intact.`)) return;
+        try {
+            await api.post(`/receipts/${receipt.id}/transfer-ownership`, { new_uploader_id: user.id });
+            fetchData();
+        } catch (err: any) {
+            alert(err.response?.data?.detail || 'Failed to transfer ownership');
+        }
+    };
     const allClaimed = items.every(i => i.contributions.length > 0);
     const imageUrl = `/api/uploads/${receipt.image_path.split('/').pop()}`;
 
-    const itemsSum = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+    const itemsSum = items.reduce((sum, item) => sum + Math.round(item.price * item.quantity), 0);
     const mismatch = itemsSum !== receipt.total_amount;
 
     return (
@@ -220,7 +369,7 @@ export const ReceiptDetails: React.FC = () => {
 
                 <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-8">
                     <div>
-                        <div className="flex items-center gap-3 mb-2">
+                        <div className="flex items-center gap-3 mb-2 flex-wrap">
                             <h1 className="text-3xl font-bold">{receipt.description || `Receipt #${receipt.id}`}</h1>
                             <span className={`px-2 py-1 rounded-lg text-xs font-bold uppercase tracking-widest ${receipt.status === 'pending' ? 'bg-amber-500/10 text-amber-500' :
                                 receipt.status === 'split' ? 'bg-green-500/10 text-green-500' :
@@ -228,11 +377,105 @@ export const ReceiptDetails: React.FC = () => {
                                 }`}>
                                 {receipt.status}
                             </span>
+                            {receipt.merchant_name && (
+                                <span className="text-xs bg-slate-800 text-slate-300 px-2.5 py-1 rounded-lg border border-slate-700 font-medium">
+                                    🏪 {receipt.merchant_name}
+                                </span>
+                            )}
                         </div>
-                        <p className="text-slate-400">Total: <span className="text-white font-bold">€{(receipt.total_amount / 100).toFixed(2)}</span></p>
+                        <div className="flex items-center gap-3 text-slate-400 text-sm flex-wrap">
+                            <p>Total: <span className="text-white font-bold">€{(receipt.total_amount / 100).toFixed(2)}</span></p>
+                            <span>•</span>
+                            {/* Purchase Date with inline edit */}
+                            {editingDate ? (
+                                <div className="flex items-center gap-1.5 bg-slate-800/90 border border-slate-700 rounded-lg p-1">
+                                    <input
+                                        type="date"
+                                        value={dateValue}
+                                        onChange={e => setDateValue(e.target.value)}
+                                        className="bg-slate-900 border border-slate-700 rounded-md px-2 py-0.5 text-xs text-white outline-none focus:border-primary-500"
+                                    />
+                                    <button
+                                        onClick={handleSaveDate}
+                                        disabled={savingDate}
+                                        className="px-2 py-0.5 bg-green-600 hover:bg-green-500 text-white rounded text-xs font-bold transition-colors"
+                                    >
+                                        Save
+                                    </button>
+                                    <button
+                                        onClick={() => setEditingDate(false)}
+                                        className="px-2 py-0.5 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded text-xs transition-colors"
+                                    >
+                                        Cancel
+                                    </button>
+                                </div>
+                            ) : (
+                                <div className="flex items-center gap-1.5 group/date">
+                                    <Calendar className="w-4 h-4 text-slate-400" />
+                                    <span>
+                                        {receipt.purchase_date
+                                            ? `Purchased: ${new Date(receipt.purchase_date).toLocaleDateString('de-DE')}`
+                                            : `Uploaded: ${receipt.created_at ? new Date(receipt.created_at).toLocaleDateString('de-DE') : 'Unknown'}`
+                                        }
+                                    </span>
+                                    {isUploader && (
+                                        <button
+                                            onClick={() => {
+                                                const d = receipt.purchase_date || receipt.created_at;
+                                                setDateValue(d ? d.substring(0, 10) : '');
+                                                setEditingDate(true);
+                                            }}
+                                            className="text-slate-500 hover:text-primary-400 p-0.5 transition-colors"
+                                            title="Edit purchase date"
+                                        >
+                                            <Pencil className="w-3.5 h-3.5" />
+                                        </button>
+                                    )}
+                                </div>
+                            )}
+
+                            {receipt.uploader && (
+                                <div className="flex items-center gap-2 mt-2 flex-wrap">
+                                    <div className="inline-flex items-center gap-1.5 bg-slate-800/80 px-2.5 py-1 rounded-lg border border-slate-700/80 text-xs">
+                                        <span 
+                                            className="w-2 h-2 rounded-full shrink-0"
+                                            style={{ backgroundColor: receipt.uploader.color || '#3B82F6' }}
+                                        />
+                                        <span className="text-slate-300 font-medium">
+                                            Uploaded by {receipt.uploader.username}
+                                        </span>
+                                        {!receipt.uploader.is_active && (
+                                            <span className="text-[10px] font-bold bg-amber-500/20 text-amber-300 px-1.5 py-0.2 rounded uppercase tracking-wider">
+                                                Inactive
+                                            </span>
+                                        )}
+                                    </div>
+
+                                    {!receipt.uploader.is_active && user && user.id !== receipt.uploader.id && (
+                                        <button
+                                            onClick={handleTransferOwnership}
+                                            className="text-xs bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 px-2.5 py-1 rounded-lg font-medium transition"
+                                            title="Transfer ownership of this receipt to your account"
+                                        >
+                                            Transfer to Me
+                                        </button>
+                                    )}
+                                </div>
+                            )}
+                        </div>
                     </div>
 
                     <div className="flex flex-wrap gap-2">
+                        {/* AI Extraction Button */}
+                        <button
+                            onClick={handleOpenAiModal}
+                            className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-indigo-300 hover:text-white px-3.5 py-3 rounded-xl font-medium text-sm transition-all shadow-sm"
+                            title="View AI extraction metadata and reconciliation"
+                        >
+                            <Sparkles className="w-4 h-4 text-indigo-400" />
+                            <span>AI Data</span>
+                        </button>
+
                         <button
                             onClick={() => setShowImage(!showImage)}
                             className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white px-4 py-3 rounded-xl font-bold transition-all"
@@ -361,9 +604,20 @@ export const ReceiptDetails: React.FC = () => {
                                 <input
                                     required
                                     type="number"
+                                    step="any"
                                     className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary-500"
                                     value={newItem.quantity}
                                     onChange={e => setNewItem({ ...newItem, quantity: e.target.value })}
+                                />
+                            </div>
+                            <div className="w-20">
+                                <label className="block text-[10px] uppercase text-slate-500 font-bold mb-1">Unit</label>
+                                <input
+                                    type="text"
+                                    placeholder="kg, Stk"
+                                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary-500"
+                                    value={newItem.unit}
+                                    onChange={e => setNewItem({ ...newItem, unit: e.target.value })}
                                 />
                             </div>
                             <button type="submit" className="bg-primary-600 hover:bg-primary-500 text-white px-4 py-2 rounded-lg font-bold text-sm h-[38px] transition-colors">
@@ -375,6 +629,11 @@ export const ReceiptDetails: React.FC = () => {
                         {items.map((item, index: number) => {
                             const myClaim = item.contributions.some(c => c.user_id === user?.id);
                             const isEditing = editingItem === item.id;
+                            const isDeposit = item.item_type === 'deposit' || item.product?.category === 'Pfand';
+                            const isDiscount = item.price < 0 || item.item_type === 'cart_discount' || item.product?.category === 'Rabatt';
+                            const hasItemDiscount = Boolean(item.discount_amount && item.discount_amount > 0);
+                            const displayName = item.product?.name || item.name;
+                            const rawDiffers = item.raw_name && item.raw_name !== displayName;
 
                             if (isEditing) {
                                 return (
@@ -402,9 +661,20 @@ export const ReceiptDetails: React.FC = () => {
                                             <label className="block text-[10px] uppercase text-slate-500 font-bold mb-1">Qty</label>
                                             <input
                                                 type="number"
+                                                step="any"
                                                 className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary-500"
                                                 value={editForm.quantity}
                                                 onChange={e => setEditForm({ ...editForm, quantity: e.target.value })}
+                                            />
+                                        </div>
+                                        <div className="w-20">
+                                            <label className="block text-[10px] uppercase text-slate-500 font-bold mb-1">Unit</label>
+                                            <input
+                                                type="text"
+                                                placeholder="kg, Stk"
+                                                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary-500"
+                                                value={editForm.unit}
+                                                onChange={e => setEditForm({ ...editForm, unit: e.target.value })}
                                             />
                                         </div>
                                         <div className="flex gap-2">
@@ -422,28 +692,146 @@ export const ReceiptDetails: React.FC = () => {
                             return (
                                 <div
                                     key={item.id}
-                                    className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 sm:p-6 transition-all group ${myClaim ? 'bg-primary-500/5' : 'hover:bg-white/5'
-                                        }`}
+                                    className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 sm:p-6 transition-all group ${
+                                        isDiscount
+                                            ? 'bg-emerald-950/20 hover:bg-emerald-950/30'
+                                            : myClaim
+                                            ? 'bg-primary-500/5'
+                                            : 'hover:bg-white/5'
+                                    }`}
                                 >
                                     <div className="flex-1 mb-4 sm:mb-0">
-                                        <div className="flex items-center gap-3">
-                                            <h4 className="font-semibold text-lg text-white mb-1">{item.name}</h4>
+                                        <div className="flex items-center gap-2.5 flex-wrap">
+                                            <h4 className="font-semibold text-lg text-white mb-0.5">
+                                                {displayName}
+                                            </h4>
+
+                                            {/* Pfand / Deposit Badge */}
+                                            {isDeposit && (
+                                                <span className="inline-flex items-center text-[10px] font-bold uppercase tracking-wider bg-amber-500/15 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-md">
+                                                    Pfand / Leergut
+                                                </span>
+                                            )}
+
+                                            {/* Standalone Discount Badge & Attach action */}
+                                            {isDiscount && (
+                                                <div className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-md">
+                                                    <Percent className="w-3 h-3 text-emerald-400" />
+                                                    <span>Rabatt</span>
+                                                    {isUploader && (
+                                                        <button
+                                                            onClick={() => setAttachingDiscountItem(item)}
+                                                            className="ml-1 text-[10px] text-emerald-200 hover:text-white underline font-semibold transition-colors flex items-center gap-0.5 lowercase tracking-normal"
+                                                            title="Attach this discount directly to a specific product"
+                                                        >
+                                                            <CornerDownRight className="w-2.5 h-2.5" />
+                                                            <span>attach</span>
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            )}
+
+                                            {/* Item-level discount badge with Unmatch button (Issue #7) */}
+                                            {hasItemDiscount && (
+                                                <div className="inline-flex items-center gap-1.5 text-[11px] font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-md">
+                                                    <Percent className="w-3 h-3 text-emerald-400" />
+                                                    <span>-€{((item.discount_amount || 0) / 100).toFixed(2)} Rabatt</span>
+                                                    {receipt.status === 'pending' && isUploader && (
+                                                        <button
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                handleUnmatchDiscount(item.id);
+                                                            }}
+                                                            className="ml-1 text-[10px] text-emerald-200 hover:text-white underline font-semibold transition-colors"
+                                                            title="Separate discount into a standalone negative line item"
+                                                        >
+                                                            Unmatch
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            )}
+
                                             {isUploader && receipt.status === 'pending' && (
                                                 <button
                                                     onClick={() => startEditing(item)}
                                                     className="opacity-0 group-hover:opacity-100 transition-opacity p-1 text-slate-500 hover:text-white"
+                                                    title="Edit item name/price"
                                                 >
                                                     <Pencil className="w-4 h-4" />
                                                 </button>
                                             )}
                                         </div>
 
-                                        {item.quantity > 1 && (
-                                            <div className="flex items-center gap-2 mt-1">
-                                                <span className="text-xs text-slate-500 bg-slate-900 px-2 py-0.5 rounded-md border border-slate-700">
-                                                    Qty: {item.quantity}
+                                        {/* Raw receipt text subtitle if canonical name differs */}
+                                        {rawDiffers && (
+                                            <p className="text-xs text-slate-400 font-mono flex items-center gap-1 mt-0.5">
+                                                Receipt: "{item.raw_name}"
+                                            </p>
+                                        )}
+
+                                        {/* Product Catalog Badges (Issue #2) */}
+                                        <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                                            {item.sku && (
+                                                <span className="text-[10px] bg-slate-900 text-slate-400 font-mono px-1.5 py-0.5 rounded border border-slate-700">
+                                                    Art. {item.sku}
                                                 </span>
-                                                {receipt.status === 'pending' && (
+                                            )}
+
+                                            {item.product ? (
+                                                <>
+                                                    {item.product.category && (
+                                                        <span className="text-[10px] bg-indigo-500/15 text-indigo-300 font-medium px-2 py-0.5 rounded-md border border-indigo-500/25">
+                                                            {item.product.category}
+                                                        </span>
+                                                    )}
+                                                    {item.product.tags && item.product.tags.map(t => (
+                                                        <span
+                                                            key={t}
+                                                            className="text-[10px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded border border-slate-700"
+                                                        >
+                                                            #{t}
+                                                        </span>
+                                                    ))}
+                                                    {isUploader && (
+                                                        <div className="flex items-center gap-1 ml-1">
+                                                            <button
+                                                                onClick={() => setMatchingItem(item)}
+                                                                className="text-slate-400 hover:text-white p-0.5 rounded transition-colors"
+                                                                title="Change product mapping"
+                                                            >
+                                                                <Tag className="w-3 h-3" />
+                                                            </button>
+                                                            <button
+                                                                onClick={() => handleUnlinkProduct(item.id)}
+                                                                className="text-slate-500 hover:text-rose-400 p-0.5 rounded transition-colors"
+                                                                title="Unlink product catalog"
+                                                            >
+                                                                <Unlink className="w-3 h-3" />
+                                                            </button>
+                                                        </div>
+                                                    )}
+                                                </>
+                                            ) : (
+                                                !isDeposit && !isDiscount && isUploader && (
+                                                    <button
+                                                        onClick={() => setMatchingItem(item)}
+                                                        className="inline-flex items-center gap-1 text-[11px] text-primary-400 hover:text-primary-300 bg-primary-950/40 hover:bg-primary-900/40 border border-primary-800/50 px-2 py-0.5 rounded-md font-medium transition-all"
+                                                        title="Match to Master Product Catalog"
+                                                    >
+                                                        <Tag className="w-3 h-3" />
+                                                        <span>+ Match Product</span>
+                                                    </button>
+                                                )
+                                            )}
+                                        </div>
+
+                                        {/* Quantity & Split button */}
+                                        {(item.quantity > 1 || item.unit) && (
+                                            <div className="flex items-center gap-2 mt-2">
+                                                <span className="text-xs text-slate-400 bg-slate-900 px-2 py-0.5 rounded-md border border-slate-700 font-mono">
+                                                    Qty: {item.quantity} {item.unit || ''}
+                                                </span>
+                                                {receipt.status === 'pending' && item.quantity > 1 && (
                                                     <button
                                                         onClick={() => handleSplitQuantity(item.id)}
                                                         className="text-[10px] uppercase tracking-tighter font-bold bg-slate-900 hover:bg-slate-750 text-primary-500 border border-slate-700 px-2 py-0.5 rounded-md transition-all"
@@ -454,6 +842,8 @@ export const ReceiptDetails: React.FC = () => {
                                                 )}
                                             </div>
                                         )}
+
+                                        {/* Participant Claims */}
                                         <div className="flex flex-wrap gap-2 mt-3">
                                             {item.contributions.length > 0 ? (
                                                 item.contributions.map((c, idx) => (
@@ -468,10 +858,19 @@ export const ReceiptDetails: React.FC = () => {
                                         </div>
                                     </div>
 
-                                    <div className="flex items-center justify-between sm:justify-end gap-4 sm:gap-12 w-full sm:w-auto">
-                                        <span className="w-20 text-left sm:text-right font-mono font-bold text-white">
-                                            €{((item.price * item.quantity) / 100).toFixed(2)}
-                                        </span>
+                                    {/* Price and Claim actions */}
+                                    <div className="flex items-center justify-between sm:justify-end gap-4 sm:gap-10 w-full sm:w-auto">
+                                        <div className="w-24 text-left sm:text-right flex flex-col items-start sm:items-end">
+                                            <span className={`font-mono font-bold ${isDiscount ? 'text-emerald-400' : 'text-white'}`}>
+                                                {item.price < 0 ? '-' : ''}€{(Math.abs(Math.round(item.price * item.quantity)) / 100).toFixed(2)}
+                                            </span>
+                                            {hasItemDiscount && item.original_price && (
+                                                <span className="line-through text-slate-500 text-xs font-mono">
+                                                    €{(Math.round(item.original_price * item.quantity) / 100).toFixed(2)}
+                                                </span>
+                                            )}
+                                        </div>
+
                                         <div className="w-12 sm:w-24 flex justify-center relative">
                                             {receipt.status === 'pending' ? (
                                                 <div className="flex gap-2">
@@ -598,15 +997,15 @@ export const ReceiptDetails: React.FC = () => {
                                         return (
                                             <div
                                                 key={item.id}
-                                                className={`grid grid-cols-12 gap-4 
- p-4 rounded-xl items-center transition-colors ${isContributed
+                                                className={`grid grid-cols-12 gap-4 p-4 rounded-xl items-center transition-colors ${
+                                                    isContributed
                                                         ? 'bg-primary-500/10 border border-primary-500/20'
                                                         : 'opacity-50 hover:opacity-75'
-                                                    }`}
+                                                }`}
                                             >
                                                 <div className="col-span-8">
                                                     <div className={`font-medium ${isContributed ? 'text-white' : 'text-slate-400'}`}>
-                                                        {item.name}
+                                                        {item.product?.name || item.name}
                                                     </div>
                                                     {item.quantity > 1 && (
                                                         <div className="text-xs text-slate-500 mt-0.5">Qty: {item.quantity}</div>
@@ -631,6 +1030,199 @@ export const ReceiptDetails: React.FC = () => {
                         </div>
                     </div>
                 )}
+
+                {/* Attach Discount Modal (Issue #7) */}
+                {attachingDiscountItem && (
+                    <div
+                        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in"
+                        onClick={() => setAttachingDiscountItem(null)}
+                    >
+                        <div
+                            className="bg-slate-900 w-full max-w-lg rounded-3xl border border-slate-700 shadow-2xl p-6 flex flex-col max-h-[80vh]"
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            <div className="flex items-start justify-between pb-4 border-b border-slate-800">
+                                <div>
+                                    <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                                        <Percent className="w-4 h-4 text-emerald-400" />
+                                        <span>Attach Discount to Product</span>
+                                    </h3>
+                                    <p className="text-xs text-slate-400 mt-1">
+                                        Select the product item this <span className="text-emerald-400 font-bold">-€{(Math.abs(attachingDiscountItem.price) / 100).toFixed(2)}</span> discount belongs to.
+                                    </p>
+                                </div>
+                                <button
+                                    onClick={() => setAttachingDiscountItem(null)}
+                                    className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800"
+                                >
+                                    <X className="w-5 h-5" />
+                                </button>
+                            </div>
+
+                            <div className="overflow-y-auto flex-1 py-4 space-y-2">
+                                {items
+                                    .filter((it) => it.id !== attachingDiscountItem.id && it.price > 0 && it.item_type !== 'deposit')
+                                    .map((target) => (
+                                        <button
+                                            key={target.id}
+                                            onClick={() => handleAttachDiscount(attachingDiscountItem.id, target.id)}
+                                            className="w-full text-left p-3.5 rounded-2xl bg-slate-800/70 hover:bg-slate-800 border border-slate-750 hover:border-slate-600 transition-all flex items-center justify-between group"
+                                        >
+                                            <div>
+                                                <div className="font-semibold text-white text-sm group-hover:text-primary-300 transition-colors">
+                                                    {target.product?.name || target.name}
+                                                </div>
+                                                {target.raw_name && target.raw_name !== (target.product?.name || target.name) && (
+                                                    <div className="text-xs text-slate-400 font-mono">
+                                                        "{target.raw_name}"
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <span className="font-mono font-bold text-white text-sm">
+                                                €{((target.price * target.quantity) / 100).toFixed(2)}
+                                            </span>
+                                        </button>
+                                    ))}
+                            </div>
+
+                            <div className="pt-3 border-t border-slate-800 flex justify-end">
+                                <button
+                                    onClick={() => setAttachingDiscountItem(null)}
+                                    className="px-4 py-2 rounded-xl text-xs font-bold border border-slate-700 text-slate-400 hover:text-white"
+                                >
+                                    Cancel
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* AI Extraction Data Modal */}
+                {showAiModal && (
+                    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+                        <div className="bg-slate-850 border border-slate-700 rounded-2xl max-w-2xl w-full max-h-[85vh] flex flex-col shadow-2xl animate-in fade-in zoom-in-95">
+                            {/* Modal Header */}
+                            <div className="flex items-center justify-between p-5 border-b border-slate-700">
+                                <div className="flex items-center gap-2.5">
+                                    <Sparkles className="w-5 h-5 text-indigo-400" />
+                                    <h3 className="font-bold text-lg text-white">AI Extraction Details</h3>
+                                </div>
+                                <button
+                                    onClick={() => setShowAiModal(false)}
+                                    className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"
+                                >
+                                    <X className="w-5 h-5" />
+                                </button>
+                            </div>
+
+                            {/* Modal Body */}
+                            <div className="p-6 overflow-y-auto space-y-5">
+                                {loadingAi ? (
+                                    <div className="flex flex-col items-center justify-center py-12 text-slate-400 gap-3">
+                                        <Loader2 className="w-8 h-8 animate-spin text-primary-500" />
+                                        <span>Loading AI extraction data...</span>
+                                    </div>
+                                ) : aiData?.error ? (
+                                    <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-sm">
+                                        {aiData.error}
+                                    </div>
+                                ) : (
+                                    <>
+                                        {/* Metadata Grid */}
+                                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                                            <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-750">
+                                                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-0.5">Date & Time</div>
+                                                <div className="text-sm font-semibold text-white">
+                                                    {aiData?.metadata?.date || 'N/A'} {aiData?.metadata?.time || ''}
+                                                </div>
+                                            </div>
+                                            <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-750">
+                                                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-0.5">Payment Method</div>
+                                                <div className="text-sm font-semibold text-white">
+                                                    {aiData?.metadata?.payment_method || 'N/A'}
+                                                    {aiData?.metadata?.card_last_four ? ` (*${aiData?.metadata?.card_last_four})` : ''}
+                                                </div>
+                                            </div>
+                                            <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-750">
+                                                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-0.5">Item Counts</div>
+                                                <div className="text-sm font-semibold text-white">
+                                                    {aiData?.metadata?.printed_item_count || 'N/A'} printed / {aiData?.metadata?.actual_items_count || 'N/A'} parsed
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* Merchant Info */}
+                                        {aiData?.merchant && (
+                                            <div className="p-4 bg-slate-900/80 rounded-xl border border-slate-750">
+                                                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Merchant / Store</div>
+                                                <div className="font-semibold text-white">{aiData.merchant.name}</div>
+                                                {aiData.merchant.address && (
+                                                    <div className="text-xs text-slate-400 mt-0.5">{aiData.merchant.address}</div>
+                                                )}
+                                            </div>
+                                        )}
+
+                                        {/* Reconciliation Card */}
+                                        {aiData?.reconciliation && (
+                                            <div className={`p-4 rounded-xl border ${
+                                                aiData.reconciliation.is_match
+                                                    ? 'bg-emerald-950/25 border-emerald-500/30'
+                                                    : 'bg-amber-950/25 border-amber-500/30'
+                                            }`}>
+                                                <div className="flex items-center justify-between mb-2">
+                                                    <span className="text-xs font-bold uppercase tracking-wider text-slate-300">Mathematical Reconciliation</span>
+                                                    <span className={`text-xs px-2 py-0.5 rounded font-bold ${
+                                                        aiData.reconciliation.is_match ? 'bg-emerald-500/20 text-emerald-300' : 'bg-amber-500/20 text-amber-300'
+                                                    }`}>
+                                                        {aiData.reconciliation.is_match ? 'Exact Match' : 'Discrepancy'}
+                                                    </span>
+                                                </div>
+                                                <div className="text-xs text-slate-300 space-y-1">
+                                                    <div>Printed: <span className="font-bold text-white">€{aiData.reconciliation.printed_total}</span> | Items Sum: <span className="font-bold text-white">€{aiData.reconciliation.calculated_items_sum}</span> (Diff: €{aiData.reconciliation.difference})</div>
+                                                    {aiData.reconciliation.discrepancy_explanation && (
+                                                        <div className="text-slate-400 italic text-[11px] mt-1 pt-1 border-t border-slate-700/40">
+                                                            "{aiData.reconciliation.discrepancy_explanation}"
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* Raw JSON */}
+                                        <div>
+                                            <div className="flex items-center justify-between mb-2">
+                                                <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Raw JSON Payload</span>
+                                                <button
+                                                    onClick={handleCopyJson}
+                                                    className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-white transition-colors"
+                                                >
+                                                    {copiedJson ? <CheckCheck className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
+                                                    <span>{copiedJson ? 'Copied!' : 'Copy JSON'}</span>
+                                                </button>
+                                            </div>
+                                            <pre className="p-4 bg-slate-950 rounded-xl border border-slate-800 text-xs text-slate-300 font-mono overflow-x-auto max-h-60 scrollbar-thin">
+                                                {JSON.stringify(aiData, null, 2)}
+                                            </pre>
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* Master Product Catalog Modal (Issue #2) */}
+                <ProductMatchModal
+                    isOpen={Boolean(matchingItem)}
+                    item={matchingItem}
+                    receiptId={receipt.id}
+                    storeName={receipt.description}
+                    onClose={() => setMatchingItem(null)}
+                    onSuccess={() => {
+                        setMatchingItem(null);
+                        fetchData();
+                    }}
+                />
             </div>
         </div>
     );

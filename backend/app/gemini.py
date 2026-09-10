@@ -1,15 +1,23 @@
 import time
-import google.generativeai as genai
-from PIL import Image
 import json
-import difflib
 import re
 import threading
 import asyncio
 import base64
 import io
+from typing import Optional, List, Dict, Any, Tuple
 import httpx
+from PIL import Image
 from app.core.config import settings
+
+# Try importing the modern unified google.genai SDK; fall back if not yet available in environment
+try:
+    from google import genai
+    from google.genai import types
+    HAS_NEW_GENAI = True
+except ImportError:
+    import google.generativeai as legacy_genai
+    HAS_NEW_GENAI = False
 
 # Setup API Key Cycling
 API_KEYS = settings.gemini_api_keys
@@ -29,35 +37,14 @@ def cycle_api_key():
         if len(API_KEYS) > 1:
             current_key_idx = (current_key_idx + 1) % len(API_KEYS)
             new_key = API_KEYS[current_key_idx]
-            genai.configure(api_key=new_key)
+            if not HAS_NEW_GENAI:
+                legacy_genai.configure(api_key=new_key)
             print(f"Switched to API Key {current_key_idx + 1}/{len(API_KEYS)}")
             return True
         return False
 
-if get_current_key():
-    genai.configure(api_key=get_current_key())
-
-# Throttler
-last_request_time = 0
-_throttle_lock = None
-
-def get_throttle_lock():
-    global _throttle_lock
-    if _throttle_lock is None:
-        _throttle_lock = asyncio.Lock()
-    return _throttle_lock
-
-THROTTLE_DELAY = 7.0  # 7 seconds
-
-async def wait_for_throttle():
-    global last_request_time
-    lock = get_throttle_lock()
-    async with lock:
-        now = time.time()
-        elapsed = now - last_request_time
-        if elapsed < THROTTLE_DELAY:
-            await asyncio.sleep(THROTTLE_DELAY - elapsed)
-        last_request_time = time.time()
+if not HAS_NEW_GENAI and get_current_key():
+    legacy_genai.configure(api_key=get_current_key())
 
 class RateLimitExceeded(Exception):
     pass
@@ -65,81 +52,162 @@ class RateLimitExceeded(Exception):
 class ParsingFailed(Exception):
     pass
 
-async def generate_with_retry(model, *args, **kwargs):
-    """
-    Executes model.generate_content_async with exponential backoff, rate limiting, and API key cycling.
-    """
-    max_retries = 3
-    base_delay = 2.0
-    
-    for attempt in range(max_retries):
-        await wait_for_throttle()
-        try:
-            response = await model.generate_content_async(*args, **kwargs)
-            return response
-        except Exception as e:
-            error_msg = str(e).lower()
-            if "429" in error_msg or "resource exhausted" in error_msg or "quota" in error_msg:
-                print(f"Rate limit hit (Attempt {attempt + 1}/{max_retries}): {e}")
-                if cycle_api_key():
-                    # If we successfully cycled, try again immediately with new key
-                    continue
-                else:
-                    # No other keys, do exponential backoff
-                    delay = base_delay * (2 ** attempt)
-                    print(f"Sleeping for {delay}s...")
-                    await asyncio.sleep(delay)
-            else:
-                # Other errors (e.g., 500), just raise
-                raise e
-                
-    raise RateLimitExceeded("Google Gemini API rate limits exceeded after all retries. Please wait a minute and try again.")
 
+PROMPT_V3 = """You are an expert OCR and financial data extraction engine specializing in European retail receipts (e.g. Austria, Germany, Switzerland).
 
-PROMPT_OCR = """
-Transcribe all the text from this receipt exactly as it appears, line by line. 
-Do not try to interpret or format the data yet. Just give me the raw text content.
+Your goal is 100% accurate, line-by-line itemization and mathematical reconciliation with the printed grand total.
+
+Extraction Guidelines:
+
+1. Horizontal Baseline & Column Alignment:
+   - Each item row has its description on the left and its final price / tax bracket on the far right.
+   - Track horizontally across the line: match each price strictly to the text sitting on that exact same horizontal baseline.
+   - European decimal commas must be converted to standard floats (e.g., "1,39" -> 1.39, "71,57" -> 71.57).
+
+2. Cancellations & Voided Items (Storno / Sofortstorno):
+   - When a cashier accidentally rings an item twice or makes a mistake, a cancellation line appears on the receipt:
+     Example:
+       107044 Laugenbaguette         1,39 A
+       107044 Laugenbaguette         1,39 A
+       Sofortstorno
+       - 107044 Laugenbaguette      -1,39 A
+   - The 'Sofortstorno' cancels out one of the preceding items. The customer did NOT buy that cancelled item.
+   - You MUST net out Stornos with their corresponding item!
+     In the example above, return EXACTLY ONE 'Laugenbaguette' with quantity: 1, total_price: 1.39.
+     Set `storno_reconciled: "2 scanned minus 1 Sofortstorno = 1 purchased"`.
+   - Do NOT output phantom cancelled items or negative storno lines as separate purchased goods.
+
+3. Bottle Deposits (Pfand / Einweg / Mehrweg / Leergut):
+   - Standard Austrian/German single-use container deposit (Einwegpfand) is €0.25 per unit (can or bottle).
+   - If a receipt prints deposit for multiple containers (e.g. 'Einweg Pfand 1,00' or '4 x 0,25' following 4 cans of Red Bull):
+     The total price charged on that line is €1.00!
+     Record: `quantity: 4`, `unit_price: 0.25`, `total_price: 1.00` (since 4 * 0.25 = 1.00).
+     NEVER calculate 4 x 1.00 = 4.00! The `total_price` must strictly equal the printed line amount (€1.00).
+   - If Pfand is listed as a single line (e.g. 'Pfand 0,25'): `quantity: 1`, `unit_price: 0.25`, `total_price: 0.25`.
+   - Returned bottles / crates (e.g. 'Leergut -2,50' or 'Pfandbon'):
+     Set `item_type: "deposit"`, `total_price: -2.50` (negative).
+
+4. Discounts (Item-Level vs Cart-Level):
+   - Item-Level Discounts (e.g. '-25% Pickerl -0,50', 'Aktion -0,70' directly under a product):
+     Apply directly to that product!
+     Record: `original_price: 2.99`, `discount_amount: 0.50`, `total_price: 2.49` (the net payable price).
+     This ensures whoever claims the item automatically pays the net discounted price.
+   - Cart-Level Discounts / Vouchers (e.g. 'Gutschein -10,00' or 'Treuebonus' at the bottom):
+     Set `item_type: "cart_discount"`, `total_price: -10.00`.
+
+5. Weighted Produce (Meat, Deli, Vegetables, Fruit):
+   - Austrian/German receipts format weighted goods with the final charged price in the right column, and weight calculation on a sub-line:
+     Example:
+       559117 Gustospieße                         6,95 A
+           0,480 kg x   14,48 EUR/kg
+     Here:
+       - The right column '6,95' is the FINAL line total charged to the customer (`total_price: 6.95`).
+       - The subline '0,480 kg x 14,48 EUR/kg' specifies the weight and kg rate (`quantity: 0.480`, `unit: "kg"`, `unit_price: 14.48`).
+       - Verification: 0.480 * 14.48 = 6.9504 -> 6.95 EUR.
+       - NEVER use the final line total (6.95) as the kg rate! The number followed by EUR/kg (14.48) is the unit rate.
+
+6. Strict Mathematical Reconciliation & Grand Total Identification:
+   - Sum every item's `total_price` (including deposits and cart discounts).
+   - Locate the printed `grand_total`: on European receipts, this is the overall final payable amount printed at the bottom of the itemized list, labeled with terms like 'SUMME', 'GESAMTBETRAG', 'HOFER PREIS', 'TOTAL', 'BAR', or 'ZU ZAHLEN' (e.g. 'HOFER PREIS 71,57' or 'SUMME 90,55').
+   - NEVER confuse the last item's price, bottle deposit, or subtotal with the receipt grand total! The grand total encompasses the entire purchase.
+   - Set `financials.grand_total` and `reconciliation.printed_total` to this printed grand total.
+   - Compute `difference = round(printed_total - calculated_items_sum, 2)`.
+   - Set `is_match: true` if abs(difference) < 0.02.
+   - Verify `actual_items_count` matches the physical items purchased (e.g. 26 Artikel).
 """
 
-PROMPT_TEXT_TO_JSON = """
-You are a data extraction expert. I will give you the raw text transcribed from a receipt.
-Your job is to extract the items purchased and the total amount.
-
-Return the result ONLY as a JSON object with this structure:
-{
-  "items": [
-    {
-      "name": "Clean name of the item",
-      "price": 123,
-      "quantity": 1
-    }
-  ],
-  "total": 1234
+SCHEMA_V3 = {
+    "type": "object",
+    "properties": {
+        "merchant": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "branch": {"type": "string"},
+                "address": {"type": "string"}
+            },
+            "required": ["name"]
+        },
+        "metadata": {
+            "type": "object",
+            "properties": {
+                "date": {"type": "string", "description": "YYYY-MM-DD"},
+                "time": {"type": "string", "description": "HH:MM:SS"},
+                "payment_method": {"type": "string"},
+                "card_last_four": {"type": "string"},
+                "printed_item_count": {"type": "integer"},
+                "actual_items_count": {"type": "integer"}
+            },
+            "required": ["date"]
+        },
+        "items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "sku": {"type": "string"},
+                    "description": {"type": "string"},
+                    "item_type": {
+                        "type": "string",
+                        "enum": ["product", "deposit", "cart_discount"]
+                    },
+                    "quantity": {"type": "number"},
+                    "unit": {"type": "string"},
+                    "unit_price": {"type": "number"},
+                    "original_price": {"type": "number"},
+                    "discount_amount": {"type": "number"},
+                    "total_price": {"type": "number"},
+                    "linked_beverage": {"type": "string"},
+                    "storno_reconciled": {"type": "string"}
+                },
+                "required": ["description", "item_type", "quantity", "total_price"]
+            }
+        },
+        "financials": {
+            "type": "object",
+            "properties": {
+                "grand_total": {
+                    "type": "number",
+                    "description": "The printed grand total for the whole receipt (e.g. SUMME, GESAMTBETRAG, HOFER PREIS). NEVER an individual line item."
+                },
+                "currency": {"type": "string"}
+            },
+            "required": ["grand_total", "currency"]
+        },
+        "reconciliation": {
+            "type": "object",
+            "properties": {
+                "calculated_items_sum": {"type": "number"},
+                "printed_total": {
+                    "type": "number",
+                    "description": "The final overall grand total printed on the receipt."
+                },
+                "difference": {"type": "number"},
+                "is_match": {"type": "boolean"},
+                "storno_notes": {"type": "string"},
+                "discrepancy_explanation": {"type": "string"}
+            },
+            "required": ["calculated_items_sum", "printed_total", "difference", "is_match"]
+        }
+    },
+    "required": ["merchant", "metadata", "items", "financials", "reconciliation"]
 }
 
-Important:
-1. Prices must be in CENTS (2.99 -> 299).
-2. If the text has unit price and quantity (e.g. "2 x 1.50"), capture that.
-3. Ignore tax, subtotals, card info, etc. unless it's the final Total.
-4. Calculate the sum of items yourself to check against the total if possible, but prioritize what is written.
-5. If a line contains only a price (e.g. "0,25") appearing immediately after an item, treat it as a related item (e.g. "Pfand" or "Deposit").
-6. If an item is listed but has no price visible, include it with price 0.
-7. CRITICAL: Do NOT group identical items. If "Apple" appears 3 times on 3 lines, return 3 separate item objects. This is required for splitting costs.
-
-Raw Text:
-"""
-
-def pil_image_to_base64(img: Image.Image) -> str:
+def pil_image_to_base64(img: Image.Image, max_dim: int = 2400) -> str:
+    w, h = img.size
+    if max(w, h) > max_dim:
+        scale = max_dim / max(w, h)
+        img = img.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
     buffered = io.BytesIO()
     if img.mode in ("RGBA", "P"):
         img = img.convert("RGB")
-    img.save(buffered, format="JPEG", quality=85)
+    img.save(buffered, format="JPEG", quality=90)
     return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
 async def call_new_api(messages: list, response_format: dict = None) -> str:
     if not settings.NEW_API_BASE_URL or not settings.NEW_API_KEY:
-        raise ParsingFailed("new-api configuration is missing NEW_API_BASE_URL or NEW_API_KEY.")
-    
+        raise ParsingFailed("New-API configuration is missing NEW_API_BASE_URL or NEW_API_KEY.")
+
     headers = {
         "Authorization": f"Bearer {settings.NEW_API_KEY}",
         "Content-Type": "application/json"
@@ -147,53 +215,40 @@ async def call_new_api(messages: list, response_format: dict = None) -> str:
     payload = {
         "model": settings.NEW_API_MODEL,
         "messages": messages,
+        "temperature": 0.0,
     }
     if response_format:
         payload["response_format"] = response_format
 
     url = f"{settings.NEW_API_BASE_URL.rstrip('/')}/chat/completions"
-    
-    print(f"Calling new-api at {url} (model: {settings.NEW_API_MODEL})")
-    
     max_retries = 3
     base_delay = 2.0
-    
+
     for attempt in range(max_retries):
         try:
             async with httpx.AsyncClient(timeout=180.0) as client:
                 response = await client.post(url, headers=headers, json=payload)
-            
+
             if response.status_code == 200:
                 res_data = response.json()
-                try:
-                    return res_data["choices"][0]["message"]["content"]
-                except (KeyError, IndexError) as e:
-                    print(f"Malformed response structure from new-api: {res_data}")
-                    raise ParsingFailed(f"Malformed response structure from new-api: {e}")
-                    
-            elif response.status_code == 429:
-                print(f"new-api rate limit hit (429) on attempt {attempt + 1}/{max_retries}")
+                return res_data["choices"][0]["message"]["content"]
+            elif response.status_code in (429, 500, 502, 503, 504) and attempt < max_retries - 1:
                 delay = base_delay * (2 ** attempt)
-                print(f"Sleeping for {delay}s...")
                 await asyncio.sleep(delay)
                 continue
             else:
-                error_detail = response.text
-                print(f"new-api returned status code {response.status_code}: {error_detail}")
-                raise ParsingFailed(f"new-api failed with status {response.status_code}: {error_detail}")
-                
+                raise ParsingFailed(f"New-API failed with status {response.status_code}: {response.text}")
         except httpx.RequestError as e:
-            print(f"HTTP Request error to new-api on attempt {attempt + 1}/{max_retries}: {type(e).__name__} {repr(e)}")
-            if attempt == max_retries - 1:
-                raise ParsingFailed(f"Failed to connect to new-api: {type(e).__name__} {repr(e)}")
-            delay = base_delay * (2 ** attempt)
-            await asyncio.sleep(delay)
-            
-    raise RateLimitExceeded("new-api rate limits or connection failures exceeded after all retries.")
+            if attempt < max_retries - 1:
+                delay = base_delay * (2 ** attempt)
+                await asyncio.sleep(delay)
+                continue
+            raise ParsingFailed(f"Failed to connect to New-API: {e}")
 
-def _get_json_from_response(response):
+    raise RateLimitExceeded("New-API rate limits or connection failures exceeded after all retries.")
+
+def _get_json_from_response(content: str) -> Optional[dict]:
     try:
-        content = response if isinstance(response, str) else response.text
         content = content.strip()
         if content.startswith("```json"):
             content = content[7:-3].strip()
@@ -201,137 +256,165 @@ def _get_json_from_response(response):
             content = content[3:-3].strip()
         return json.loads(content)
     except Exception as e:
-        print(f"Error parsing response: {e}")
+        print(f"Error parsing response JSON: {e}")
         return None
 
-def normalize_line(line):
-    s = line.lower()
-    s = s.replace('o', '0').replace('l', '1').replace('i', '1').replace('z', '2').replace('s', '5').replace('b', '8')
-    return re.sub(r'[^a-z0-9]', '', s)
-
-def stitch_text_parts(parts):
-    if not parts:
-        return ""
-    full_lines = parts[0].splitlines()
-    for i in range(1, len(parts)):
-        prev_lines = full_lines
-        next_lines = parts[i].splitlines()
-        SEARCH_WINDOW = 50
-        prev_window_start = max(0, len(prev_lines) - SEARCH_WINDOW)
-        prev_candidate = prev_lines[prev_window_start:]
-        next_candidate = next_lines[:SEARCH_WINDOW]
-        prev_norm = [normalize_line(line) for line in prev_candidate]
-        next_norm = [normalize_line(line) for line in next_candidate]
-        matcher = difflib.SequenceMatcher(None, prev_norm, next_norm)
-        match = matcher.find_longest_match(0, len(prev_norm), 0, len(next_norm))
-        if match.size >= 2: 
-            cut_index_in_prev = prev_window_start + match.a
-            start_index_in_next = match.b
-            full_lines = prev_lines[:cut_index_in_prev] + next_lines[start_index_in_next:]
-        else:
-            full_lines.extend(next_lines)
-    return "\n".join(full_lines)
-
-def slice_image(img, max_height=1000, overlap=200):
-    width, height = img.size
-    slices = []
-    if height <= max_height:
-        return [img]
-    current_y = 0
-    while current_y < height:
-        target_y = min(current_y + max_height, height)
-        box = (0, current_y, width, target_y)
-        slices.append(img.crop(box))
-        if target_y == height:
-            break
-        current_y += (max_height - overlap)
-    return slices
-
 async def parse_receipt(file_path: str):
+    """
+    Parses receipt using single-shot multimodal Gemini 2.5 Flash.
+    Converts extracted values to CENTS for GrocerSplit.
+    """
     img = Image.open(file_path)
-    
     use_new_api = bool(settings.NEW_API_BASE_URL and settings.NEW_API_KEY)
-    
-    if not use_new_api:
-        if not get_current_key():
-            raise ParsingFailed("No API key configured. Provide either GEMINI_API_KEY or NEW_API_BASE_URL/NEW_API_KEY.")
-        model = genai.GenerativeModel('gemini-2.5-flash')
-        json_model = genai.GenerativeModel(
-            'gemini-2.5-flash',
-            generation_config={"response_mime_type": "application/json"}
-        )
-    
-    slices = slice_image(img, max_height=1500, overlap=300)
-    raw_text_parts = []
-    
-    for i, slice_img in enumerate(slices):
-        try:
-            if use_new_api:
-                base64_img = pil_image_to_base64(slice_img)
-                messages = [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": PROMPT_OCR},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/jpeg;base64,{base64_img}"
-                                }
-                            }
-                        ]
-                    }
+
+    data = None
+    if use_new_api:
+        base64_img = pil_image_to_base64(img)
+        full_system_prompt = f"{PROMPT_V3}\n\nStrictly output ONLY valid JSON matching this schema:\n{json.dumps(SCHEMA_V3, indent=2)}"
+        messages = [
+            {"role": "system", "content": full_system_prompt},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Extract all items, totals, and metadata from this receipt according to the guidelines."},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_img}"}}
                 ]
-                content = await call_new_api(messages)
-                raw_text_parts.append(content)
-            else:
-                ocr_response = await generate_with_retry(model, [PROMPT_OCR, slice_img])
-                raw_text_parts.append(ocr_response.text)
-        except Exception as e:
-            print(f"OCR Step Failed for slice {i}: {e}")
-            if isinstance(e, (RateLimitExceeded, ParsingFailed)):
-                raise e
-            raise ParsingFailed(f"OCR Step Failed: {e}")
-    
-    if not len(raw_text_parts):
-         raise ParsingFailed("Failed to transcribe any text from the image.")
+            }
+        ]
+        raw_resp = await call_new_api(messages, response_format={"type": "json_object"})
+        data = _get_json_from_response(raw_resp)
+    else:
+        if not get_current_key():
+            raise ParsingFailed("No GEMINI_API_KEY configured.")
 
-    full_text = stitch_text_parts(raw_text_parts)
-    
-    try:
-        if use_new_api:
-            messages = [
-                {
-                    "role": "user",
-                    "content": PROMPT_TEXT_TO_JSON + full_text
-                }
-            ]
-            content = await call_new_api(messages, response_format={"type": "json_object"})
-            data = _get_json_from_response(content)
-        else:
-            parse_response = await generate_with_retry(json_model, PROMPT_TEXT_TO_JSON + full_text)
-            data = _get_json_from_response(parse_response)
-    except Exception as e:
-        print(f"Parsing Step Failed: {e}")
-        if isinstance(e, (RateLimitExceeded, ParsingFailed)):
-            raise e
-        raise ParsingFailed("Failed to extract JSON from text.") from e
-    
+        # Run direct Google GenAI SDK call
+        max_retries = 4
+        base_delay = 2.0
+
+        for attempt in range(max_retries):
+            try:
+                if HAS_NEW_GENAI:
+                    client = genai.Client(api_key=get_current_key())
+                    config = types.GenerateContentConfig(
+                        temperature=0.0,
+                        thinking_config=types.ThinkingConfig(),
+                        media_resolution=types.MediaResolution.MEDIA_RESOLUTION_HIGH,
+                        response_mime_type="application/json",
+                        response_schema=SCHEMA_V3,
+                        system_instruction=PROMPT_V3,
+                    )
+                    user_content = [
+                        "Extract all items, totals, and metadata from this receipt according to the guidelines.",
+                        img
+                    ]
+                    # Run in threadpool to avoid blocking event loop
+                    response = await asyncio.to_thread(
+                        client.models.generate_content,
+                        model='gemini-2.5-flash',
+                        contents=user_content,
+                        config=config
+                    )
+                    data = _get_json_from_response(response.text or "")
+                    break
+                else:
+                    # Legacy SDK fallback
+                    model = legacy_genai.GenerativeModel(
+                        'gemini-2.5-flash',
+                        generation_config={"response_mime_type": "application/json"}
+                    )
+                    user_content = [
+                        f"{PROMPT_V3}\n\nStrictly output JSON according to schema:\n{json.dumps(SCHEMA_V3)}",
+                        img
+                    ]
+                    response = await asyncio.to_thread(model.generate_content, user_content)
+                    data = _get_json_from_response(response.text or "")
+                    break
+
+            except Exception as e:
+                err_str = str(e).lower()
+                is_transient = any(x in err_str for x in ["429", "500", "502", "503", "504", "unavailable", "quota", "high demand"])
+                if is_transient and attempt < max_retries - 1:
+                    if "quota" in err_str or "429" in err_str:
+                        if cycle_api_key():
+                            await asyncio.sleep(1)
+                            continue
+                    delay = base_delay * (2 ** attempt)
+                    print(f"Gemini API transient error ({type(e).__name__}). Retrying in {delay:.1f}s...")
+                    await asyncio.sleep(delay)
+                    continue
+                raise ParsingFailed(f"Gemini API extraction failed: {e}")
+
     if not data or not isinstance(data.get("items"), list):
-        raise ParsingFailed("Invalid JSON format returned from API.")
-        
-    items = data.get("items", [])
-    total = data.get("total", 0)
-    
-    if not items and total == 0:
-        raise ParsingFailed("API returned empty items list and 0 total.")
+        raise ParsingFailed("Invalid JSON format returned from Gemini API.")
 
-    items_sum = sum(item.get("price", 0) * item.get("quantity", 1) for item in items)
-    mismatch = items_sum != total
-    
+    parsed_items = data.get("items", [])
+    financials = data.get("financials", {})
+    reconciliation = data.get("reconciliation", {})
+
+    grand_total_float = float(financials.get("grand_total") or 0.0)
+    if grand_total_float == 0.0 and reconciliation.get("printed_total") is not None:
+        grand_total_float = float(reconciliation.get("printed_total") or 0.0)
+
+    receipt_total_cents = int(round(grand_total_float * 100))
+
+    # Convert items to GrocerSplit format with cent amounts and rich metadata
+    grocer_items = []
+    for it in parsed_items:
+        tp_float = float(it.get("total_price", 0.0))
+        item_line_total_cents = int(round(tp_float * 100))
+
+        orig_price_float = it.get("original_price")
+        orig_cents = int(round(orig_price_float * 100)) if orig_price_float is not None else None
+
+        disc_float = float(it.get("discount_amount", 0.0) or 0.0)
+        disc_cents = int(round(disc_float * 100))
+
+        qty = float(it.get("quantity", 1.0))
+        unit = it.get("unit")
+        unit_price_float = it.get("unit_price")
+
+        # Determine price in cents:
+        # In GrocerSplit, item.price represents unit price, and line total = round(price * quantity).
+        if qty <= 0:
+            qty = 1.0
+            price_cents = item_line_total_cents
+        elif abs(qty - 1.0) < 0.0001:
+            price_cents = item_line_total_cents
+        elif unit_price_float is not None and abs(round(round(unit_price_float * 100) * qty) - item_line_total_cents) <= 2:
+            # Validated unit price matches total (e.g. 14.48 EUR/kg * 0.480 kg = 6.95 EUR)
+            price_cents = int(round(unit_price_float * 100))
+        else:
+            # Calculate unit price from total to ensure exact line total multiplication
+            price_cents = int(round(item_line_total_cents / qty))
+
+        # Build notes if weighted
+        notes = it.get("linked_beverage") or it.get("storno_reconciled")
+        if unit in ["kg", "g", "l", "ml"] and unit_price_float is not None:
+            weight_note = f"{qty} {unit} @ €{unit_price_float:.2f}/{unit}"
+            notes = f"{notes} ({weight_note})" if notes else weight_note
+
+        grocer_items.append({
+            "name": it.get("description", "Item").strip(),
+            "raw_name": it.get("description", "Item").strip(),
+            "sku": it.get("sku"),
+            "item_type": it.get("item_type", "product"),
+            "price": price_cents,
+            "original_price": orig_cents,
+            "discount_amount": disc_cents,
+            "quantity": qty,
+            "unit": unit,
+            "notes": notes
+        })
+
+    items_sum_cents = sum(int(round(it["price"] * it["quantity"])) for it in grocer_items)
+    mismatch = abs(items_sum_cents - receipt_total_cents) > 2  # Tolerance of 2 cents
+
     return {
-        "items": items,
-        "total": total,
+        "items": grocer_items,
+        "total": receipt_total_cents,
         "mismatch": mismatch,
-        "items_sum": items_sum
+        "items_sum": items_sum_cents,
+        "merchant": data.get("merchant", {}),
+        "metadata": data.get("metadata", {}),
+        "reconciliation": reconciliation
     }

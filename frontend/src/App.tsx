@@ -6,6 +6,8 @@ import { Dashboard } from './Dashboard';
 import { UploadPage } from './UploadPage';
 import { ReceiptDetails } from './ReceiptDetails';
 import { ProfilePage } from './ProfilePage';
+import { CatalogPage } from './CatalogPage';
+import { AnalyticsPage } from './AnalyticsPage';
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, loading } = useAuth();
@@ -32,7 +34,16 @@ const App: React.FC = () => {
               <UploadPage />
             </ProtectedRoute>
           } />
-
+          <Route path="/catalog" element={
+            <ProtectedRoute>
+              <CatalogPage />
+            </ProtectedRoute>
+          } />
+          <Route path="/analytics" element={
+            <ProtectedRoute>
+              <AnalyticsPage />
+            </ProtectedRoute>
+          } />
           <Route path="/receipt/:id" element={
             <ProtectedRoute>
               <ReceiptDetails />
@@ -48,5 +59,6 @@ const App: React.FC = () => {
     </AuthProvider>
   );
 };
+
 
 export default App;
