@@ -8,6 +8,8 @@ import {
     Users,
     ShieldCheck,
     Archive as ArchiveIcon,
+    ArchiveRestore,
+    Scissors,
     Loader2,
     Info,
     Trash2,
@@ -140,6 +142,25 @@ export const ReceiptDetails: React.FC = () => {
             fetchData();
         } catch (err) {
             alert('Failed to split item');
+        }
+    };
+
+    const handleSplitAmount = async (itemId: number) => {
+        if (!confirm('Split this item amount into two halves (50/50)?')) return;
+        try {
+            await api.post(`/receipts/${id}/items/${itemId}/split-amount`);
+            fetchData();
+        } catch (err: any) {
+            alert(err.response?.data?.detail || 'Failed to split item amount');
+        }
+    };
+
+    const handleUnarchive = async () => {
+        try {
+            await api.post(`/receipts/${id}/unarchive`);
+            fetchData();
+        } catch (err: any) {
+            alert(err.response?.data?.detail || 'Failed to unarchive receipt');
         }
     };
 
@@ -515,10 +536,22 @@ export const ReceiptDetails: React.FC = () => {
                                 </button>
                             </>
                         )}
-                        {isUploader && receipt.status === 'archived' && (
-                            <div className="flex items-center gap-2 px-4 py-3 border border-slate-700 rounded-xl text-slate-500 bg-slate-800/50">
-                                <ArchiveIcon className="w-5 h-5" />
-                                <span>Archived</span>
+                        {receipt.status === 'archived' && (
+                            <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-2 px-4 py-3 border border-slate-700 rounded-xl text-slate-400 bg-slate-800/50 text-sm font-medium">
+                                    <ArchiveIcon className="w-5 h-5 text-slate-500" />
+                                    <span>Archived</span>
+                                </div>
+                                {isUploader && (
+                                    <button
+                                        onClick={handleUnarchive}
+                                        className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-amber-400 hover:text-amber-300 px-4 py-3 rounded-xl font-bold transition-all shadow-sm"
+                                        title="Restore receipt from archive"
+                                    >
+                                        <ArchiveRestore className="w-5 h-5" />
+                                        <span>Unarchive</span>
+                                    </button>
+                                )}
                             </div>
                         )}
                     </div>
@@ -558,19 +591,24 @@ export const ReceiptDetails: React.FC = () => {
 
                 <div className="bg-slate-800 rounded-3xl border border-slate-700 shadow-2xl">
                     <div className="p-4 sm:p-6 border-b border-slate-700 bg-slate-800/50 flex items-center justify-between text-sm font-medium text-slate-400 uppercase tracking-wider">
-                        <span>Items List</span>
-                        <div className="flex gap-4 sm:gap-12 items-center">
+                        <div className="flex items-center gap-3">
+                            <span>Items List</span>
+                            <span className="text-xs bg-slate-900 border border-slate-700 px-2 py-0.5 rounded-full text-slate-400 font-mono font-bold">
+                                {items.length}
+                            </span>
+                        </div>
+                        <div className="flex gap-4 sm:gap-10 items-center">
                             {receipt.status === 'pending' && isUploader && (
                                 <button
                                     onClick={() => setShowAddForm(!showAddForm)}
-                                    className="flex items-center gap-1 text-[10px] bg-primary-600/20 hover:bg-primary-600/30 text-primary-400 px-2 py-1 rounded-md border border-primary-500/30 transition-all mr-4"
+                                    className="flex items-center gap-1 text-[10px] bg-primary-600/20 hover:bg-primary-600/30 text-primary-400 px-2 py-1 rounded-md border border-primary-500/30 transition-all mr-2"
                                 >
                                     <Plus className="w-3 h-3" />
                                     Add Item
                                 </button>
                             )}
-                            <span className="w-20 text-right">Price</span>
-                            <span className="w-12 sm:w-24 text-center">Status</span>
+                            <span className="hidden sm:inline-block w-24 text-right">Price</span>
+                            <span className="hidden sm:inline-block w-28 text-right">Status</span>
                         </div>
                     </div>
 
@@ -692,242 +730,279 @@ export const ReceiptDetails: React.FC = () => {
                             return (
                                 <div
                                     key={item.id}
-                                    className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 sm:p-6 transition-all group ${
+                                    className={`p-4 sm:p-6 transition-all group border-b border-slate-800/40 last:border-b-0 ${
                                         isDiscount
-                                            ? 'bg-emerald-950/20 hover:bg-emerald-950/30'
+                                            ? "bg-emerald-950/20 hover:bg-emerald-950/30"
                                             : myClaim
-                                            ? 'bg-primary-500/5'
-                                            : 'hover:bg-white/5'
+                                            ? "bg-primary-500/5"
+                                            : "hover:bg-white/5"
                                     }`}
                                 >
-                                    <div className="flex-1 mb-4 sm:mb-0">
-                                        <div className="flex items-center gap-2.5 flex-wrap">
-                                            <h4 className="font-semibold text-lg text-white mb-0.5">
-                                                {displayName}
-                                            </h4>
+                                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-6">
+                                        
+                                        {/* Main Item Information */}
+                                        <div className="flex-1 min-w-0">
+                                            
+                                            {/* Item Header: Title, Edit Button, Badges + Mobile Price */}
+                                            <div className="flex items-start justify-between gap-3">
+                                                <div className="flex items-center gap-2 flex-wrap flex-1">
+                                                    <h4 className="font-semibold text-base sm:text-lg text-white">
+                                                        {displayName}
+                                                    </h4>
 
-                                            {/* Pfand / Deposit Badge */}
-                                            {isDeposit && (
-                                                <span className="inline-flex items-center text-[10px] font-bold uppercase tracking-wider bg-amber-500/15 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-md">
-                                                    Pfand / Leergut
-                                                </span>
-                                            )}
-
-                                            {/* Standalone Discount Badge & Attach action */}
-                                            {isDiscount && (
-                                                <div className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-md">
-                                                    <Percent className="w-3 h-3 text-emerald-400" />
-                                                    <span>Rabatt</span>
-                                                    {isUploader && (
+                                                    {/* Prominent, Always-Visible Edit Button */}
+                                                    {isUploader && receipt.status === "pending" && (
                                                         <button
-                                                            onClick={() => setAttachingDiscountItem(item)}
-                                                            className="ml-1 text-[10px] text-emerald-200 hover:text-white underline font-semibold transition-colors flex items-center gap-0.5 lowercase tracking-normal"
-                                                            title="Attach this discount directly to a specific product"
+                                                            onClick={() => startEditing(item)}
+                                                            className="p-1 text-slate-400 hover:text-white bg-slate-900/80 hover:bg-slate-800 border border-slate-700/70 rounded-lg transition-colors shadow-sm"
+                                                            title="Edit item name, price, quantity, unit"
                                                         >
-                                                            <CornerDownRight className="w-2.5 h-2.5" />
-                                                            <span>attach</span>
+                                                            <Pencil className="w-3.5 h-3.5" />
                                                         </button>
                                                     )}
-                                                </div>
-                                            )}
 
-                                            {/* Item-level discount badge with Unmatch button (Issue #7) */}
-                                            {hasItemDiscount && (
-                                                <div className="inline-flex items-center gap-1.5 text-[11px] font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-md">
-                                                    <Percent className="w-3 h-3 text-emerald-400" />
-                                                    <span>-€{((item.discount_amount || 0) / 100).toFixed(2)} Rabatt</span>
-                                                    {receipt.status === 'pending' && isUploader && (
-                                                        <button
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                handleUnmatchDiscount(item.id);
-                                                            }}
-                                                            className="ml-1 text-[10px] text-emerald-200 hover:text-white underline font-semibold transition-colors"
-                                                            title="Separate discount into a standalone negative line item"
-                                                        >
-                                                            Unmatch
-                                                        </button>
-                                                    )}
-                                                </div>
-                                            )}
-
-                                            {isUploader && receipt.status === 'pending' && (
-                                                <button
-                                                    onClick={() => startEditing(item)}
-                                                    className="opacity-0 group-hover:opacity-100 transition-opacity p-1 text-slate-500 hover:text-white"
-                                                    title="Edit item name/price"
-                                                >
-                                                    <Pencil className="w-4 h-4" />
-                                                </button>
-                                            )}
-                                        </div>
-
-                                        {/* Raw receipt text subtitle if canonical name differs */}
-                                        {rawDiffers && (
-                                            <p className="text-xs text-slate-400 font-mono flex items-center gap-1 mt-0.5">
-                                                Receipt: "{item.raw_name}"
-                                            </p>
-                                        )}
-
-                                        {/* Product Catalog Badges (Issue #2) */}
-                                        <div className="flex flex-wrap items-center gap-1.5 mt-2">
-                                            {item.sku && (
-                                                <span className="text-[10px] bg-slate-900 text-slate-400 font-mono px-1.5 py-0.5 rounded border border-slate-700">
-                                                    Art. {item.sku}
-                                                </span>
-                                            )}
-
-                                            {item.product ? (
-                                                <>
-                                                    {item.product.category && (
-                                                        <span className="text-[10px] bg-indigo-500/15 text-indigo-300 font-medium px-2 py-0.5 rounded-md border border-indigo-500/25">
-                                                            {item.product.category}
+                                                    {/* Pfand Badge */}
+                                                    {isDeposit && (
+                                                        <span className="inline-flex items-center text-[10px] font-bold uppercase tracking-wider bg-amber-500/15 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-md">
+                                                            Pfand / Leergut
                                                         </span>
                                                     )}
-                                                    {item.product.tags && item.product.tags.map(t => (
-                                                        <span
-                                                            key={t}
-                                                            className="text-[10px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded border border-slate-700"
-                                                        >
-                                                            #{t}
-                                                        </span>
-                                                    ))}
-                                                    {isUploader && (
-                                                        <div className="flex items-center gap-1 ml-1">
-                                                            <button
-                                                                onClick={() => setMatchingItem(item)}
-                                                                className="text-slate-400 hover:text-white p-0.5 rounded transition-colors"
-                                                                title="Change product mapping"
-                                                            >
-                                                                <Tag className="w-3 h-3" />
-                                                            </button>
-                                                            <button
-                                                                onClick={() => handleUnlinkProduct(item.id)}
-                                                                className="text-slate-500 hover:text-rose-400 p-0.5 rounded transition-colors"
-                                                                title="Unlink product catalog"
-                                                            >
-                                                                <Unlink className="w-3 h-3" />
-                                                            </button>
+
+                                                    {/* Standalone Discount Badge & Attach action */}
+                                                    {isDiscount && (
+                                                        <div className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-md">
+                                                            <Percent className="w-3 h-3 text-emerald-400" />
+                                                            <span>Rabatt</span>
+                                                            {isUploader && (
+                                                                <button
+                                                                    onClick={() => setAttachingDiscountItem(item)}
+                                                                    className="ml-1 text-[10px] text-emerald-200 hover:text-white underline font-semibold transition-colors flex items-center gap-0.5 lowercase tracking-normal"
+                                                                    title="Attach this discount directly to a specific product"
+                                                                >
+                                                                    <CornerDownRight className="w-2.5 h-2.5" />
+                                                                    <span>attach</span>
+                                                                </button>
+                                                            )}
                                                         </div>
                                                     )}
-                                                </>
-                                            ) : (
-                                                !isDeposit && !isDiscount && isUploader && (
-                                                    <button
-                                                        onClick={() => setMatchingItem(item)}
-                                                        className="inline-flex items-center gap-1 text-[11px] text-primary-400 hover:text-primary-300 bg-primary-950/40 hover:bg-primary-900/40 border border-primary-800/50 px-2 py-0.5 rounded-md font-medium transition-all"
-                                                        title="Match to Master Product Catalog"
-                                                    >
-                                                        <Tag className="w-3 h-3" />
-                                                        <span>+ Match Product</span>
-                                                    </button>
-                                                )
-                                            )}
-                                        </div>
 
-                                        {/* Quantity & Split button */}
-                                        {(item.quantity > 1 || item.unit) && (
-                                            <div className="flex items-center gap-2 mt-2">
-                                                <span className="text-xs text-slate-400 bg-slate-900 px-2 py-0.5 rounded-md border border-slate-700 font-mono">
-                                                    Qty: {item.quantity} {item.unit || ''}
-                                                </span>
-                                                {receipt.status === 'pending' && item.quantity > 1 && (
-                                                    <button
-                                                        onClick={() => handleSplitQuantity(item.id)}
-                                                        className="text-[10px] uppercase tracking-tighter font-bold bg-slate-900 hover:bg-slate-750 text-primary-500 border border-slate-700 px-2 py-0.5 rounded-md transition-all"
-                                                        title="Split into individual items"
-                                                    >
-                                                        Split Qty
-                                                    </button>
+                                                    {/* Item-level discount badge with Unmatch button */}
+                                                    {hasItemDiscount && (
+                                                        <div className="inline-flex items-center gap-1.5 text-[11px] font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-md">
+                                                            <Percent className="w-3 h-3 text-emerald-400" />
+                                                            <span>-€{((item.discount_amount || 0) / 100).toFixed(2)} Rabatt</span>
+                                                            {receipt.status === "pending" && isUploader && (
+                                                                <button
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        handleUnmatchDiscount(item.id);
+                                                                    }}
+                                                                    className="ml-1 text-[10px] text-emerald-200 hover:text-white underline font-semibold transition-colors"
+                                                                    title="Separate discount into a standalone negative line item"
+                                                                >
+                                                                    Unmatch
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                </div>
+
+                                                {/* Mobile Price: Anchored at top-right of card */}
+                                                <div className="sm:hidden text-right shrink-0">
+                                                    <span className={`font-mono font-bold text-base ${isDiscount ? "text-emerald-400" : "text-white"}`}>
+                                                        {item.price < 0 ? "-" : ""}€{(Math.abs(Math.round(item.price * item.quantity)) / 100).toFixed(2)}
+                                                    </span>
+                                                    {hasItemDiscount && item.original_price && (
+                                                        <span className="block line-through text-slate-500 text-[11px] font-mono">
+                                                            €{(Math.round(item.original_price * item.quantity) / 100).toFixed(2)}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            </div>
+
+                                            {/* Raw receipt text subtitle if canonical name differs */}
+                                            {rawDiffers && (
+                                                <p className="text-xs text-slate-400 font-mono flex items-center gap-1 mt-0.5">
+                                                    Receipt: "{item.raw_name}"
+                                                </p>
+                                            )}
+
+                                            {/* Product Catalog Badges */}
+                                            <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                                                {item.sku && (
+                                                    <span className="text-[10px] bg-slate-900 text-slate-400 font-mono px-1.5 py-0.5 rounded border border-slate-700">
+                                                        Art. {item.sku}
+                                                    </span>
+                                                )}
+
+                                                {item.product ? (
+                                                    <>
+                                                        {item.product.category && (
+                                                            <span className="text-[10px] bg-indigo-500/15 text-indigo-300 font-medium px-2 py-0.5 rounded-md border border-indigo-500/25">
+                                                                {item.product.category}
+                                                            </span>
+                                                        )}
+                                                        {item.product.tags && item.product.tags.map(t => (
+                                                            <span
+                                                                key={t}
+                                                                className="text-[10px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded border border-slate-700"
+                                                            >
+                                                                #{t}
+                                                            </span>
+                                                        ))}
+                                                        {isUploader && (
+                                                            <div className="flex items-center gap-1 ml-1">
+                                                                <button
+                                                                    onClick={() => setMatchingItem(item)}
+                                                                    className="text-slate-400 hover:text-white p-0.5 rounded transition-colors"
+                                                                    title="Change product mapping"
+                                                                >
+                                                                    <Tag className="w-3 h-3" />
+                                                                </button>
+                                                                <button
+                                                                    onClick={() => handleUnlinkProduct(item.id)}
+                                                                    className="text-slate-500 hover:text-rose-400 p-0.5 rounded transition-colors"
+                                                                    title="Unlink product catalog"
+                                                                >
+                                                                    <Unlink className="w-3 h-3" />
+                                                                </button>
+                                                            </div>
+                                                        )}
+                                                    </>
+                                                ) : (
+                                                    !isDeposit && !isDiscount && isUploader && (
+                                                        <button
+                                                            onClick={() => setMatchingItem(item)}
+                                                            className="inline-flex items-center gap-1 text-[11px] text-primary-400 hover:text-primary-300 bg-primary-950/40 hover:bg-primary-900/40 border border-primary-800/50 px-2 py-0.5 rounded-md font-medium transition-all"
+                                                            title="Match to Master Product Catalog"
+                                                        >
+                                                            <Tag className="w-3 h-3" />
+                                                            <span>+ Match Product</span>
+                                                        </button>
+                                                    )
                                                 )}
                                             </div>
-                                        )}
 
-                                        {/* Participant Claims */}
-                                        <div className="flex flex-wrap gap-2 mt-3">
-                                            {item.contributions.length > 0 ? (
-                                                item.contributions.map((c, idx) => (
-                                                    <div key={idx} className="bg-slate-900 border border-slate-700 px-3 py-1 rounded-full text-xs flex items-center gap-2" style={{ borderColor: c.color ? `${c.color}40` : undefined }}>
-                                                        <div className="w-2 h-2 rounded-full" style={{ backgroundColor: c.color || '#3B82F6' }} />
-                                                        <span className="font-medium" style={{ color: c.color || '#cbd5e1' }}>{c.username || `User ${c.user_id}`}</span>
-                                                    </div>
-                                                ))
-                                            ) : (
-                                                <span className="text-xs text-rose-500/60 font-medium italic">Unclaimed</span>
-                                            )}
-                                        </div>
-                                    </div>
-
-                                    {/* Price and Claim actions */}
-                                    <div className="flex items-center justify-between sm:justify-end gap-4 sm:gap-10 w-full sm:w-auto">
-                                        <div className="w-24 text-left sm:text-right flex flex-col items-start sm:items-end">
-                                            <span className={`font-mono font-bold ${isDiscount ? 'text-emerald-400' : 'text-white'}`}>
-                                                {item.price < 0 ? '-' : ''}€{(Math.abs(Math.round(item.price * item.quantity)) / 100).toFixed(2)}
-                                            </span>
-                                            {hasItemDiscount && item.original_price && (
-                                                <span className="line-through text-slate-500 text-xs font-mono">
-                                                    €{(Math.round(item.original_price * item.quantity) / 100).toFixed(2)}
-                                                </span>
-                                            )}
-                                        </div>
-
-                                        <div className="w-12 sm:w-24 flex justify-center relative">
-                                            {receipt.status === 'pending' ? (
-                                                <div className="flex gap-2">
-                                                    {isUploader && (
-                                                        <div className="relative">
+                                            {/* Quantity & Splitters (Quantity & Amount) */}
+                                            <div className="flex items-center gap-2 mt-2 flex-wrap">
+                                                {(item.quantity > 1 || item.unit) && (
+                                                    <span className="text-xs text-slate-400 bg-slate-900 px-2 py-0.5 rounded-md border border-slate-700 font-mono">
+                                                        Qty: {item.quantity} {item.unit || ""}
+                                                    </span>
+                                                )}
+                                                {receipt.status === "pending" && isUploader && (
+                                                    <>
+                                                        {item.quantity > 1 && (
                                                             <button
-                                                                onClick={() => setAssigningItem(assigningItem === item.id ? null : item.id)}
-                                                                className={`p-3 rounded-2xl transition-all border-2 bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-500 hover:text-white`}
-                                                                title="Assign to someone"
+                                                                onClick={() => handleSplitQuantity(item.id)}
+                                                                className="text-[10px] uppercase tracking-tighter font-bold bg-slate-900 hover:bg-slate-750 text-primary-400 border border-slate-700 px-2 py-0.5 rounded-md transition-all"
+                                                                title="Split 1 unit into a separate line item"
                                                             >
-                                                                <UserPlus className="w-5 h-5" />
+                                                                Split Qty
                                                             </button>
-                                                            {assigningItem === item.id && (
-                                                                <div className={`absolute right-0 z-20 w-48 bg-slate-800 border border-slate-700 rounded-xl shadow-xl overflow-hidden animate-in fade-in zoom-in-95 ${items.length > 2 && index >= items.length - 2 ? 'bottom-full mb-2' : 'top-full mt-2'
-                                                                    }`}>
-                                                                    <div className="p-2 text-[10px] uppercase font-bold text-slate-500">Assign To:</div>
-                                                                    {data.participants.map(p => {
-                                                                        const claimed = item.contributions.some(c => c.user_id === p.user_id);
-                                                                        return (
-                                                                            <button
-                                                                                key={p.user_id}
-                                                                                onClick={() => handleClaim(item.id, p.user_id)}
-                                                                                className={`w-full text-left px-4 py-2 text-sm flex items-center gap-2 hover:bg-slate-700 ${claimed ? 'text-primary-400' : 'text-slate-300'}`}
-                                                                            >
-                                                                                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: p.color }} />
-                                                                                <span>{p.username}</span>
-                                                                                {claimed && <Check className="w-3 h-3 ml-auto" />}
-                                                                            </button>
-                                                                        )
-                                                                    })}
-                                                                </div>
-                                                            )}
-                                                            {assigningItem === item.id && (
-                                                                <div
-                                                                    className="fixed inset-0 z-10"
-                                                                    onClick={() => setAssigningItem(null)}
-                                                                />
-                                                            )}
+                                                        )}
+                                                        <button
+                                                            onClick={() => handleSplitAmount(item.id)}
+                                                            className="text-[10px] uppercase tracking-tighter font-bold bg-slate-900 hover:bg-slate-750 text-amber-400 border border-slate-700 px-2 py-0.5 rounded-md transition-all flex items-center gap-1"
+                                                            title="Split this item amount into two halves (50/50)"
+                                                        >
+                                                            <Scissors className="w-2.5 h-2.5" />
+                                                            <span>Split Amount</span>
+                                                        </button>
+                                                    </>
+                                                )}
+                                            </div>
+
+                                            {/* Participant Claims */}
+                                            <div className="flex flex-wrap gap-1.5 mt-2.5">
+                                                {item.contributions.length > 0 ? (
+                                                    item.contributions.map((c, idx) => (
+                                                        <div key={idx} className="bg-slate-900 border border-slate-700 px-2.5 py-0.5 rounded-full text-xs flex items-center gap-1.5" style={{ borderColor: c.color ? `${c.color}40` : undefined }}>
+                                                            <div className="w-2 h-2 rounded-full" style={{ backgroundColor: c.color || "#3B82F6" }} />
+                                                            <span className="font-medium text-[11px]" style={{ color: c.color || "#cbd5e1" }}>{c.username || `User ${c.user_id}`}</span>
                                                         </div>
-                                                    )}
-                                                    <button
-                                                        onClick={() => handleClaim(item.id)}
-                                                        className={`p-3 rounded-2xl transition-all border-2 ${myClaim
-                                                            ? 'bg-primary-600 border-primary-500 text-white shadow-lg shadow-primary-600/30'
-                                                            : 'bg-slate-900 border-slate-700 text-slate-400 hover:bg-slate-800 hover:border-slate-500 hover:text-white'
-                                                            }`}
-                                                    >
-                                                        <Check className={`w-5 h-5 ${myClaim ? 'stroke-[3px]' : ''}`} />
-                                                    </button>
-                                                </div>
-                                            ) : (
-                                                item.contributions.find(c => c.user_id === user?.id) && (
-                                                    <div className="bg-green-500/20 text-green-500 p-2 rounded-xl">
-                                                        <Check className="w-5 h-5" />
+                                                    ))
+                                                ) : (
+                                                    <span className="text-xs text-rose-500/60 font-medium italic">Unclaimed</span>
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        {/* Actions and Desktop Price Area */}
+                                        <div className="flex items-center justify-between sm:justify-end gap-3 sm:gap-6 mt-3 sm:mt-0 pt-2 sm:pt-0 border-t border-slate-800/60 sm:border-0 shrink-0">
+                                            
+                                            {/* Desktop Price */}
+                                            <div className="hidden sm:flex w-24 text-right flex-col items-end shrink-0">
+                                                <span className={`font-mono font-bold ${isDiscount ? "text-emerald-400" : "text-white"}`}>
+                                                    {item.price < 0 ? "-" : ""}€{(Math.abs(Math.round(item.price * item.quantity)) / 100).toFixed(2)}
+                                                </span>
+                                                {hasItemDiscount && item.original_price && (
+                                                    <span className="line-through text-slate-500 text-xs font-mono">
+                                                        €{(Math.round(item.original_price * item.quantity) / 100).toFixed(2)}
+                                                    </span>
+                                                )}
+                                            </div>
+
+                                            {/* Claim & Assign Buttons */}
+                                            <div className="w-full sm:w-28 flex items-center justify-end gap-2 relative shrink-0">
+                                                {receipt.status === "pending" ? (
+                                                    <div className="flex gap-2">
+                                                        {isUploader && (
+                                                            <div className="relative">
+                                                                <button
+                                                                    onClick={() => setAssigningItem(assigningItem === item.id ? null : item.id)}
+                                                                    className="p-2.5 sm:p-3 rounded-2xl transition-all border-2 bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-500 hover:text-white"
+                                                                    title="Assign to someone"
+                                                                >
+                                                                    <UserPlus className="w-4 h-4 sm:w-5 sm:h-5" />
+                                                                </button>
+                                                                {assigningItem === item.id && (
+                                                                    <div className={`absolute right-0 z-20 w-48 bg-slate-800 border border-slate-700 rounded-xl shadow-xl overflow-hidden animate-in fade-in zoom-in-95 ${items.length > 2 && index >= items.length - 2 ? "bottom-full mb-2" : "top-full mt-2"
+                                                                        }`}>
+                                                                        <div className="p-2 text-[10px] uppercase font-bold text-slate-500">Assign To:</div>
+                                                                        {data.participants.map(p => {
+                                                                            const claimed = item.contributions.some(c => c.user_id === p.user_id);
+                                                                            return (
+                                                                                <button
+                                                                                    key={p.user_id}
+                                                                                    onClick={() => handleClaim(item.id, p.user_id)}
+                                                                                    className={`w-full text-left px-4 py-2 text-sm flex items-center gap-2 hover:bg-slate-700 ${claimed ? "text-primary-400" : "text-slate-300"}`}
+                                                                                >
+                                                                                    <div className="w-2 h-2 rounded-full" style={{ backgroundColor: p.color }} />
+                                                                                    <span>{p.username}</span>
+                                                                                    {claimed && <Check className="w-3 h-3 ml-auto" />}
+                                                                                </button>
+                                                                            )
+                                                                        })}
+                                                                    </div>
+                                                                )}
+                                                                {assigningItem === item.id && (
+                                                                    <div
+                                                                        className="fixed inset-0 z-10"
+                                                                        onClick={() => setAssigningItem(null)}
+                                                                    />
+                                                                )}
+                                                            </div>
+                                                        )}
+                                                        <button
+                                                            onClick={() => handleClaim(item.id)}
+                                                            className={`p-2.5 sm:p-3 rounded-2xl transition-all border-2 ${myClaim
+                                                                ? "bg-primary-600 border-primary-500 text-white shadow-lg shadow-primary-600/30"
+                                                                : "bg-slate-900 border-slate-700 text-slate-400 hover:bg-slate-800 hover:border-slate-500 hover:text-white"
+                                                                }`}
+                                                            title={myClaim ? "You claimed this item" : "Click to claim"}
+                                                        >
+                                                            <Check className={`w-4 h-4 sm:w-5 sm:h-5 ${myClaim ? "stroke-[3px]" : ""}`} />
+                                                        </button>
                                                     </div>
-                                                )
-                                            )}
+                                                ) : (
+                                                    item.contributions.find(c => c.user_id === user?.id) && (
+                                                        <div className="bg-green-500/20 text-green-500 p-2 rounded-xl">
+                                                            <Check className="w-5 h-5" />
+                                                        </div>
+                                                    )
+                                                )}
+                                            </div>
                                         </div>
                                     </div>
                                 </div>

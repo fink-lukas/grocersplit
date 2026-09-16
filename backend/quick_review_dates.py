@@ -16,7 +16,6 @@ import subprocess
 import shutil
 from datetime import datetime
 from pathlib import Path
-from dotenv import load_dotenv
 
 # Find .env
 env_path = Path(__file__).resolve().parent.parent / ".env"
@@ -44,6 +43,11 @@ if not DATABASE_URL:
 host_db_url = DATABASE_URL
 if "@db:" in host_db_url:
     host_db_url = host_db_url.replace("@db:", "@localhost:")
+
+# Ensure backend directory is on sys.path for direct script execution
+backend_dir = str(Path(__file__).resolve().parent)
+if backend_dir not in sys.path:
+    sys.path.insert(0, backend_dir)
 
 from sqlmodel import create_engine, Session, select
 from app.models import Receipt, Item
@@ -108,7 +112,7 @@ def main():
         if args.id:
             query = query.where(Receipt.id == args.id)
         elif not args.all:
-            query = query.where(Receipt.purchase_date == None)
+            query = query.where(Receipt.purchase_date.is_(None))
 
         receipts = session.exec(query).all()
         total = len(receipts)

@@ -61,7 +61,11 @@ export const CatalogPage: React.FC = () => {
     const [formName, setFormName] = useState('');
     const [formCategory, setFormCategory] = useState('');
     const [formTags, setFormTags] = useState<string[]>([]);
-    const [tagInput, setTagInput] = useState('');
+    const [allTags, setAllTags] = useState<string[]>([]);
+    const [showTagModal, setShowTagModal] = useState(false);
+    const [newTagName, setNewTagName] = useState("");
+    const [tagCreating, setTagCreating] = useState(false);
+    const [tagSearchInModal, setTagSearchInModal] = useState("");
     const [formUnit, setFormUnit] = useState('');
     const [modalSubmitting, setModalSubmitting] = useState(false);
     const [modalError, setModalError] = useState<string | null>(null);
@@ -94,6 +98,41 @@ export const CatalogPage: React.FC = () => {
         }
     };
 
+    const fetchTags = async () => {
+        try {
+            const res = await api.get('/products/tags');
+            setAllTags(res.data || []);
+        } catch (err) {
+            console.error('Failed to load tags', err);
+        }
+    };
+
+    const handleCreateTag = async (e: React.FormEvent) => {
+        e.preventDefault();
+        const clean = newTagName.trim().replace("#", "");
+        if (!clean) return;
+        setTagCreating(true);
+        try {
+            const res = await api.post('/products/tags', { name: clean });
+            setAllTags(res.data.tags || []);
+            setNewTagName("");
+        } catch (err: any) {
+            alert(err.response?.data?.detail || "Failed to create tag");
+        } finally {
+            setTagCreating(false);
+        }
+    };
+
+    const handleDeleteTag = async (tagName: string) => {
+        if (!confirm(`Delete tag #${tagName}?`)) return;
+        try {
+            const res = await api.delete(`/products/tags/${encodeURIComponent(tagName)}`);
+            setAllTags(res.data.tags || []);
+        } catch (err: any) {
+            alert(err.response?.data?.detail || "Failed to delete tag");
+        }
+    };
+
     const fetchProducts = async (q: string = searchQuery, cat: string = selectedCategory) => {
         setLoading(true);
         try {
@@ -111,6 +150,7 @@ export const CatalogPage: React.FC = () => {
 
     useEffect(() => {
         fetchCategories();
+        fetchTags();
         fetchProducts();
     }, []);
 
@@ -243,12 +283,11 @@ export const CatalogPage: React.FC = () => {
         }
     };
 
-    const handleAddTag = (tag: string) => {
+    const handleSelectTag = (tag: string) => {
         const clean = tag.trim().replace(/^#/, '');
         if (clean && !formTags.includes(clean)) {
             setFormTags([...formTags, clean]);
         }
-        setTagInput('');
     };
 
     const handleRemoveTag = (t: string) => {
@@ -282,6 +321,21 @@ export const CatalogPage: React.FC = () => {
                         >
                             {rematching ? <Loader2 className="w-4 h-4 animate-spin text-primary-400" /> : <Sparkles className="w-4 h-4 text-amber-400" />}
                             <span>{rematching ? 'Matching...' : 'Re-match History'}</span>
+                        </button>
+
+                        <button
+                            onClick={() => {
+                                fetchTags();
+                                setShowTagModal(true);
+                            }}
+                            className="inline-flex items-center gap-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-bold text-sm px-4 py-2.5 rounded-xl transition-all shadow-sm"
+                            title="Manage intentional household tags"
+                        >
+                            <Tag className="w-4 h-4 text-primary-400" />
+                            <span>Manage Tags</span>
+                            <span className="bg-slate-900 border border-slate-700 px-1.5 py-0.2 rounded-full text-xs text-primary-400 font-mono">
+                                {allTags.length}
+                            </span>
                         </button>
 
                         <button
@@ -558,6 +612,101 @@ export const CatalogPage: React.FC = () => {
                     </div>
                 )}
 
+                                {/* Tag Manager Modal */}
+                {showTagModal && (
+                    <div
+                        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in"
+                        onClick={() => setShowTagModal(false)}
+                    >
+                        <div
+                            className="bg-slate-900 w-full max-w-lg rounded-3xl border border-slate-700 shadow-2xl p-6 flex flex-col max-h-[90vh]"
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+                                <div className="flex items-center gap-2.5">
+                                    <div className="p-2 rounded-xl bg-primary-600/20 text-primary-400 border border-primary-500/30">
+                                        <Tag className="w-5 h-5" />
+                                    </div>
+                                    <div>
+                                        <h3 className="text-lg font-bold text-white">Manage Intentional Tags</h3>
+                                        <p className="text-xs text-slate-400">Curated tags for household categorization (no typos)</p>
+                                    </div>
+                                </div>
+                                <button
+                                    onClick={() => setShowTagModal(false)}
+                                    className="text-slate-400 hover:text-white p-1 rounded-lg"
+                                >
+                                    <X className="w-5 h-5" />
+                                </button>
+                            </div>
+
+                            {/* Create Tag Input */}
+                            <form onSubmit={handleCreateTag} className="pt-4 pb-2">
+                                <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1.5">
+                                    Create New Tag
+                                </label>
+                                <div className="flex gap-2">
+                                    <input
+                                        type="text"
+                                        required
+                                        value={newTagName}
+                                        onChange={(e) => setNewTagName(e.target.value)}
+                                        placeholder="e.g. Bio, Essentials, Weekly..."
+                                        className="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 outline-none focus:border-primary-500 transition-all"
+                                    />
+                                    <button
+                                        type="submit"
+                                        disabled={tagCreating || !newTagName.trim()}
+                                        className="bg-primary-600 hover:bg-primary-500 disabled:opacity-50 text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow-md transition-all flex items-center gap-1.5"
+                                    >
+                                        {tagCreating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                                        <span>Add Tag</span>
+                                    </button>
+                                </div>
+                            </form>
+
+                            {/* Current Tags List */}
+                            <div className="py-4 overflow-y-auto flex-1">
+                                <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">
+                                    Available Tags ({allTags.length})
+                                </label>
+                                {allTags.length === 0 ? (
+                                    <p className="text-xs text-slate-500 italic">No tags created yet. Add your first tag above.</p>
+                                ) : (
+                                    <div className="flex flex-wrap gap-2">
+                                        {allTags.map((tag) => (
+                                            <div
+                                                key={tag}
+                                                className="bg-slate-800 border border-slate-700 hover:border-slate-600 rounded-xl px-3 py-1.5 text-xs text-slate-200 font-medium flex items-center gap-2 shadow-sm"
+                                            >
+                                                <span className="text-primary-400">#</span>
+                                                <span>{tag}</span>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleDeleteTag(tag)}
+                                                    className="text-slate-500 hover:text-rose-400 p-0.5 rounded transition-colors"
+                                                    title={`Delete tag #${tag}`}
+                                                >
+                                                    <Trash2 className="w-3.5 h-3.5" />
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="pt-4 border-t border-slate-800 flex justify-end">
+                                <button
+                                    onClick={() => setShowTagModal(false)}
+                                    className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-bold transition-all"
+                                >
+                                    Done
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
                 {/* Create / Edit Modal */}
                 {modalMode && (
                     <div
@@ -631,47 +780,75 @@ export const CatalogPage: React.FC = () => {
                                 </div>
 
                                 <div>
-                                    <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">
-                                        Tags
-                                    </label>
-                                    <div className="flex flex-wrap gap-1.5 mb-2">
-                                        {formTags.map((t) => (
-                                            <span
-                                                key={t}
-                                                className="bg-primary-950/60 border border-primary-500/30 text-primary-300 text-xs font-medium px-2.5 py-1 rounded-lg flex items-center gap-1.5"
-                                            >
-                                                #{t}
-                                                <button
-                                                    type="button"
-                                                    onClick={() => handleRemoveTag(t)}
-                                                    className="hover:text-white"
-                                                >
-                                                    <X className="w-3 h-3" />
-                                                </button>
-                                            </span>
-                                        ))}
+                                    <div className="flex items-center justify-between mb-1">
+                                        <label className="block text-xs font-bold uppercase tracking-wider text-slate-400">
+                                            Tags (Household categorization)
+                                        </label>
+                                        <span className="text-[10px] text-slate-500">Search & select only</span>
                                     </div>
-                                    <div className="flex gap-2">
+                                    <div className="flex flex-wrap gap-1.5 mb-2.5 min-h-[28px]">
+                                        {formTags.length === 0 ? (
+                                            <span className="text-xs text-slate-500 italic">No tags selected</span>
+                                        ) : (
+                                            formTags.map((t) => (
+                                                <span
+                                                    key={t}
+                                                    className="bg-primary-950/60 border border-primary-500/30 text-primary-300 text-xs font-medium px-2.5 py-1 rounded-lg flex items-center gap-1.5 shadow-sm"
+                                                >
+                                                    #{t}
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleRemoveTag(t)}
+                                                        className="hover:text-white"
+                                                        title="Remove tag"
+                                                    >
+                                                        <X className="w-3 h-3" />
+                                                    </button>
+                                                </span>
+                                            ))
+                                        )}
+                                    </div>
+
+                                    {/* Search existing approved tags */}
+                                    <div className="relative mb-2">
+                                        <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                                         <input
                                             type="text"
-                                            value={tagInput}
-                                            onChange={(e) => setTagInput(e.target.value)}
-                                            onKeyDown={(e) => {
-                                                if (e.key === 'Enter' || e.key === ',') {
-                                                    e.preventDefault();
-                                                    handleAddTag(tagInput);
-                                                }
-                                            }}
-                                            placeholder="Type a tag and press Enter..."
-                                            className="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-sm text-white placeholder-slate-500 outline-none focus:border-primary-500"
+                                            value={tagSearchInModal}
+                                            onChange={(e) => setTagSearchInModal(e.target.value)}
+                                            placeholder="Search approved tags..."
+                                            className="w-full bg-slate-800 border border-slate-700 rounded-xl pl-8 pr-3 py-2 text-xs text-white placeholder-slate-500 outline-none focus:border-primary-500 transition-all"
                                         />
-                                        <button
-                                            type="button"
-                                            onClick={() => handleAddTag(tagInput)}
-                                            className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-2 rounded-xl text-xs font-bold border border-slate-700"
-                                        >
-                                            Add
-                                        </button>
+                                    </div>
+
+                                    <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto p-2 bg-slate-950/40 rounded-xl border border-slate-800/80">
+                                        {(() => {
+                                            const query = tagSearchInModal.toLowerCase().trim();
+                                            const filtered = allTags.filter(t => 
+                                                !formTags.includes(t) && (!query || t.toLowerCase().includes(query))
+                                            );
+                                            if (filtered.length === 0) {
+                                                return (
+                                                    <div className="text-[11px] text-slate-500 p-1">
+                                                        <span>{query ? `No matching tags found for "${query}".` : "All available tags already selected."}</span>
+                                                        <span className="block text-[10px] text-slate-600 mt-0.5">
+                                                            New tags can be created in the "Manage Tags" menu.
+                                                        </span>
+                                                    </div>
+                                                );
+                                            }
+                                            return filtered.map((pt) => (
+                                                <button
+                                                    key={pt}
+                                                    type="button"
+                                                    onClick={() => handleSelectTag(pt)}
+                                                    className="text-[11px] px-2.5 py-1 rounded-lg border bg-slate-800 hover:bg-slate-750 text-slate-300 border-slate-700 hover:border-slate-500 transition-all flex items-center gap-1"
+                                                >
+                                                    <span>+</span>
+                                                    <span>#{pt}</span>
+                                                </button>
+                                            ));
+                                        })()}
                                     </div>
                                 </div>
 

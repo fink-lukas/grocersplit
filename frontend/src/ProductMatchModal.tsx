@@ -45,16 +45,7 @@ const CATEGORY_SUGGESTIONS = [
     'Other'
 ];
 
-const POPULAR_TAGS = [
-    'Essentials',
-    'Bio / Organic',
-    'Vegan',
-    'Vegetarian',
-    'Weekly',
-    'Snack',
-    'Breakfast',
-    'Drink'
-];
+
 
 export const ProductMatchModal: React.FC<ProductMatchModalProps> = ({
     isOpen,
@@ -71,11 +62,12 @@ export const ProductMatchModal: React.FC<ProductMatchModalProps> = ({
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [categories, setCategories] = useState<string[]>(CATEGORY_SUGGESTIONS);
+    const [availableTags, setAvailableTags] = useState<string[]>([]);
+    const [tagSearch, setTagSearch] = useState("");
 
     // Form fields for creating a new product
     const [newName, setNewName] = useState('');
     const [newCategory, setNewCategory] = useState('');
-    const [tagInput, setTagInput] = useState('');
     const [selectedTags, setSelectedTags] = useState<string[]>([]);
 
     useEffect(() => {
@@ -89,8 +81,20 @@ export const ProductMatchModal: React.FC<ProductMatchModalProps> = ({
             setActiveTab('search');
             fetchProducts(initialQuery);
             fetchCategories();
+            fetchTags();
         }
     }, [isOpen, item]);
+
+    const fetchTags = async () => {
+        try {
+            const res = await api.get("/products/tags");
+            if (res.data && Array.isArray(res.data)) {
+                setAvailableTags(res.data);
+            }
+        } catch (err) {
+            console.error("Failed to load tags", err);
+        }
+    };
 
     const fetchCategories = async () => {
         try {
@@ -165,18 +169,10 @@ export const ProductMatchModal: React.FC<ProductMatchModalProps> = ({
         if (clean && !selectedTags.includes(clean)) {
             setSelectedTags([...selectedTags, clean]);
         }
-        setTagInput('');
     };
 
     const handleRemoveTag = (tagToRemove: string) => {
         setSelectedTags(selectedTags.filter(t => t !== tagToRemove));
-    };
-
-    const handleTagKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-        if (e.key === 'Enter' || e.key === ',') {
-            e.preventDefault();
-            handleAddTag(tagInput);
-        }
     };
 
     if (!isOpen || !item) return null;
@@ -406,61 +402,75 @@ export const ProductMatchModal: React.FC<ProductMatchModalProps> = ({
                             </div>
 
                             <div>
-                                <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">
-                                    Tags (Household categorization)
-                                </label>
-                                <div className="flex flex-wrap gap-1.5 mb-2">
-                                    {selectedTags.map((t) => (
-                                        <span
-                                            key={t}
-                                            className="bg-primary-950/50 border border-primary-500/30 text-primary-300 text-xs font-medium px-2.5 py-1 rounded-lg flex items-center gap-1.5"
-                                        >
-                                            #{t}
-                                            <button
-                                                type="button"
-                                                onClick={() => handleRemoveTag(t)}
-                                                className="hover:text-white"
-                                            >
-                                                <X className="w-3 h-3" />
-                                            </button>
-                                        </span>
-                                    ))}
+                                <div className="flex items-center justify-between mb-1">
+                                    <label className="block text-xs font-bold uppercase tracking-wider text-slate-400">
+                                        Tags (Household categorization)
+                                    </label>
+                                    <span className="text-[10px] text-slate-500">Search & select only</span>
                                 </div>
-                                <div className="flex gap-2">
+                                <div className="flex flex-wrap gap-1.5 mb-2.5 min-h-[28px]">
+                                    {selectedTags.length === 0 ? (
+                                        <span className="text-xs text-slate-500 italic">No tags selected yet</span>
+                                    ) : (
+                                        selectedTags.map((t) => (
+                                            <span
+                                                key={t}
+                                                className="bg-primary-950/60 border border-primary-500/30 text-primary-300 text-xs font-medium px-2.5 py-1 rounded-lg flex items-center gap-1.5 shadow-sm"
+                                            >
+                                                #{t}
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleRemoveTag(t)}
+                                                    className="hover:text-white"
+                                                    title="Remove tag"
+                                                >
+                                                    <X className="w-3 h-3" />
+                                                </button>
+                                            </span>
+                                        ))
+                                    )}
+                                </div>
+
+                                {/* Search existing approved tags */}
+                                <div className="relative mb-2">
+                                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                                     <input
                                         type="text"
-                                        value={tagInput}
-                                        onChange={(e) => setTagInput(e.target.value)}
-                                        onKeyDown={handleTagKeyDown}
-                                        placeholder="Type a tag and press Enter..."
-                                        className="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-sm text-white placeholder-slate-500 outline-none focus:border-primary-500 transition-all"
+                                        value={tagSearch}
+                                        onChange={(e) => setTagSearch(e.target.value)}
+                                        placeholder="Search approved tags..."
+                                        className="w-full bg-slate-800 border border-slate-700 rounded-xl pl-8 pr-3 py-2 text-xs text-white placeholder-slate-500 outline-none focus:border-primary-500 transition-all"
                                     />
-                                    <button
-                                        type="button"
-                                        onClick={() => handleAddTag(tagInput)}
-                                        className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-2 rounded-xl text-xs font-bold border border-slate-700"
-                                    >
-                                        Add
-                                    </button>
                                 </div>
-                                <div className="flex flex-wrap gap-1.5 mt-2">
-                                    {POPULAR_TAGS.map((pt) => {
-                                        const isSelected = selectedTags.includes(pt);
-                                        return (
+
+                                <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto p-2 bg-slate-950/40 rounded-xl border border-slate-800/80">
+                                    {(() => {
+                                        const query = tagSearch.toLowerCase().trim();
+                                        const filtered = availableTags.filter(t => 
+                                            !selectedTags.includes(t) && (!query || t.toLowerCase().includes(query))
+                                        );
+                                        if (filtered.length === 0) {
+                                            return (
+                                                <div className="text-[11px] text-slate-500 p-1">
+                                                    <span>{query ? `No matching tags found for "${query}".` : "All available tags already selected."}</span>
+                                                    <span className="block text-[10px] text-slate-600 mt-0.5">
+                                                        New tags must be created in Catalog &gt; Manage Tags to avoid typos.
+                                                    </span>
+                                                </div>
+                                            );
+                                        }
+                                        return filtered.map((pt) => (
                                             <button
                                                 key={pt}
                                                 type="button"
-                                                onClick={() => isSelected ? handleRemoveTag(pt) : handleAddTag(pt)}
-                                                className={`text-[10px] px-2 py-0.5 rounded-md border transition-all ${
-                                                    isSelected
-                                                        ? 'bg-primary-600/30 text-primary-300 border-primary-500/40 font-bold'
-                                                        : 'bg-slate-900 text-slate-400 border-slate-800 hover:border-slate-700'
-                                                }`}
+                                                onClick={() => handleAddTag(pt)}
+                                                className="text-[11px] px-2.5 py-1 rounded-lg border bg-slate-800 hover:bg-slate-750 text-slate-300 border-slate-700 hover:border-slate-500 transition-all flex items-center gap-1"
                                             >
-                                                +{pt}
+                                                <span>+</span>
+                                                <span>#{pt}</span>
                                             </button>
-                                        );
-                                    })}
+                                        ));
+                                    })()}
                                 </div>
                             </div>
 

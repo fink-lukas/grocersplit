@@ -5,56 +5,60 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlmodel import Session, select
 from app.database import get_session
-from app.models import Product, ProductAlias, User, Item
+from app.models import Product, ProductAlias, User, Item, Category, Tag
 from app.auth import get_current_user
 from app.services.catalog_service import normalize_string, rematch_unlinked_items
 
 router = APIRouter(prefix="/api/products", tags=["products"])
 
 CATEGORIES_FILE = Path(__file__).resolve().parent.parent / "core" / "categories.json"
+TAGS_FILE = Path(__file__).resolve().parent.parent / "core" / "tags.json"
 
 
-@router.get("/categories")
-def get_categories():
-    """Returns available product categories from configuration."""
-    if CATEGORIES_FILE.exists():
-        try:
-            with open(CATEGORIES_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return [
-        "Pfand", "Rabatt", "Produce", "Dairy & Eggs", "Bakery", "Meat & Fish",
-        "Pantry & Dry Goods", "Beverages", "Snacks & Sweets", "Frozen",
-        "Household & Cleaning", "Personal Care", "Pet Supplies", "Other"
-    ]
+class TagCreate(BaseModel):
+    name: str
 
 
 class CategoryCreate(BaseModel):
     name: str
 
 
+@router.get("/categories")
+def get_categories(db: Session = Depends(get_session)):
+    """Returns available product categories from database (falling back to categories.json seed if empty)."""
+    cats = db.exec(select(Category.name)).all()
+    if not cats:
+        if CATEGORIES_FILE.exists():
+            try:
+                with open(CATEGORIES_FILE, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return [
+            "Pfand", "Rabatt", "Produce", "Dairy & Eggs", "Bakery", "Meat & Fish",
+            "Pantry & Dry Goods", "Beverages", "Snacks & Sweets", "Frozen",
+            "Household & Cleaning", "Personal Care", "Pet Supplies", "Other"
+        ]
+    return sorted(list(cats))
+
+
 @router.post("/categories")
-def add_category(data: CategoryCreate):
-    """Adds a new custom product category to the configuration."""
+def add_category(
+    data: CategoryCreate,
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Adds a new custom product category to the database."""
     name = data.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Category name cannot be empty")
 
-    current_cats = []
-    if CATEGORIES_FILE.exists():
-        try:
-            with open(CATEGORIES_FILE, "r", encoding="utf-8") as f:
-                current_cats = json.load(f)
-        except Exception:
-            current_cats = []
+    existing = db.get(Category, name)
+    if not existing:
+        db.add(Category(name=name))
+        db.commit()
 
-    if name not in current_cats:
-        current_cats.append(name)
-        with open(CATEGORIES_FILE, "w", encoding="utf-8") as f:
-            json.dump(current_cats, f, indent=2, ensure_ascii=False)
-
-    return current_cats
+    return sorted(list(db.exec(select(Category.name)).all()))
 
 
 class ProductCreate(BaseModel):
@@ -141,9 +145,16 @@ def get_all_tags(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
-    """Returns a list of all distinct tags currently used across products."""
+    """Returns a list of all intentional tags from the Tag table, merged with any tags currently on products."""
+    all_tags = set(db.exec(select(Tag.name)).all())
+    if not all_tags and TAGS_FILE.exists():
+        try:
+            with open(TAGS_FILE, "r", encoding="utf-8") as f:
+                all_tags = set(t.strip().replace("#", "") for t in json.load(f) if t and t.strip())
+        except Exception:
+            pass
+
     products = db.exec(select(Product)).all()
-    all_tags = set()
     for p in products:
         try:
             tags = json.loads(p.tags) if p.tags else []
@@ -153,6 +164,43 @@ def get_all_tags(
         except Exception:
             pass
     return sorted(list(all_tags))
+
+
+@router.post("/tags")
+def create_tag(
+    data: TagCreate,
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Adds a new tag to the Tag database table."""
+    clean = data.name.strip().replace("#", "")
+    if not clean:
+        raise HTTPException(status_code=400, detail="Tag name cannot be empty")
+    
+    existing = db.get(Tag, clean)
+    if not existing:
+        db.add(Tag(name=clean))
+        db.commit()
+
+    tags = sorted(list(set(db.exec(select(Tag.name)).all())))
+    return {"message": "Tag created", "tags": tags}
+
+
+@router.delete("/tags/{tag_name}")
+def delete_tag(
+    tag_name: str,
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Removes a tag from the Tag database table."""
+    clean = tag_name.strip().replace("#", "")
+    tag = db.get(Tag, clean)
+    if tag:
+        db.delete(tag)
+        db.commit()
+
+    tags = sorted(list(set(db.exec(select(Tag.name)).all())))
+    return {"message": "Tag deleted", "tags": tags}
 
 
 @router.post("")

@@ -2,7 +2,7 @@ from fastapi import FastAPI, Depends, HTTPException, status, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session, select
 from app.database import get_session, init_db
-from app.models import User, Notification, Product, ProductAlias, Item, Receipt, ReceiptParticipant, Contribution
+from app.models import User, Notification, Product, ProductAlias, Item, Receipt, ReceiptParticipant, Contribution, Category, Tag
 from app.auth import get_password_hash, verify_password, create_access_token, create_refresh_token, get_current_user
 from app.receipts import router as receipts_router
 from app.routers.auth import router as auth_router
@@ -53,11 +53,11 @@ def on_startup():
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE \"user\" ADD COLUMN IF NOT EXISTS color VARCHAR DEFAULT '#3B82F6';"))
             conn.execute(text("ALTER TABLE \"user\" ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;"))
-            conn.execute(text("UPDATE \"user\" SET is_active = FALSE WHERE username = 'Alex';"))
             conn.execute(text("ALTER TABLE \"receipt\" ADD COLUMN IF NOT EXISTS mismatch BOOLEAN DEFAULT FALSE;"))
             conn.execute(text("ALTER TABLE \"receipt\" ADD COLUMN IF NOT EXISTS purchase_date TIMESTAMP WITHOUT TIME ZONE;"))
             conn.execute(text("ALTER TABLE \"receipt\" ADD COLUMN IF NOT EXISTS merchant_name VARCHAR;"))
             conn.execute(text("ALTER TABLE \"receipt\" ADD COLUMN IF NOT EXISTS raw_json TEXT;"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_receipt_purchase_date ON \"receipt\" (purchase_date);"))
             conn.execute(text("ALTER TABLE \"item\" ADD COLUMN IF NOT EXISTS product_id INTEGER REFERENCES product(id) ON DELETE SET NULL;"))
             conn.execute(text("ALTER TABLE \"item\" ADD COLUMN IF NOT EXISTS raw_name VARCHAR;"))
             conn.execute(text("ALTER TABLE \"item\" ADD COLUMN IF NOT EXISTS sku VARCHAR;"))
@@ -80,3 +80,35 @@ def on_startup():
         print("Database migrations checked and applied successfully.")
     except Exception as e:
         print(f"Startup migration warning: {e}")
+
+    # Seed initial categories and tags from seed JSON files if not present in DB
+    try:
+        import json
+        from pathlib import Path
+        categories_file = Path(__file__).resolve().parent / "core" / "categories.json"
+        tags_file = Path(__file__).resolve().parent / "core" / "tags.json"
+
+        with Session(engine) as session:
+            if categories_file.exists():
+                with open(categories_file, "r", encoding="utf-8") as f:
+                    cats = json.load(f)
+                    existing_cats = set(session.exec(select(Category.name)).all())
+                    for c in cats:
+                        c_clean = str(c).strip()
+                        if c_clean and c_clean not in existing_cats:
+                            session.add(Category(name=c_clean))
+                            existing_cats.add(c_clean)
+                    session.commit()
+
+            if tags_file.exists():
+                with open(tags_file, "r", encoding="utf-8") as f:
+                    tags = json.load(f)
+                    existing_tags = set(session.exec(select(Tag.name)).all())
+                    for t in tags:
+                        t_clean = str(t).strip().replace("#", "")
+                        if t_clean and t_clean not in existing_tags:
+                            session.add(Tag(name=t_clean))
+                            existing_tags.add(t_clean)
+                    session.commit()
+    except Exception as e:
+        print(f"Seed categories/tags warning: {e}")

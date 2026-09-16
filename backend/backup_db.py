@@ -15,11 +15,23 @@ import json
 import argparse
 from datetime import datetime
 from pathlib import Path
-from dotenv import load_dotenv
 
 # Find .env
 env_path = Path(__file__).resolve().parent.parent / ".env"
-load_dotenv(dotenv_path=env_path)
+try:
+    from dotenv import load_dotenv
+    load_dotenv(dotenv_path=env_path)
+except ImportError:
+    if env_path.exists():
+        with open(env_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    k = k.strip()
+                    v = v.strip().strip("'").strip('"')
+                    if k not in os.environ:
+                        os.environ[k] = v
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
@@ -30,6 +42,11 @@ if not DATABASE_URL:
 host_db_url = DATABASE_URL
 if "@db:" in host_db_url:
     host_db_url = host_db_url.replace("@db:", "@localhost:")
+
+# Ensure backend directory is on sys.path for direct script execution
+backend_dir = str(Path(__file__).resolve().parent)
+if backend_dir not in sys.path:
+    sys.path.insert(0, backend_dir)
 
 from sqlmodel import create_engine, Session, select, text
 

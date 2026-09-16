@@ -140,3 +140,11 @@ ProductAlias.update_forward_refs()
 Item.update_forward_refs()
 Contribution.update_forward_refs()
 Notification.update_forward_refs()
+
+
+class Category(SQLModel, table=True):
+    name: str = Field(primary_key=True)
+
+
+class Tag(SQLModel, table=True):
+    name: str = Field(primary_key=True)

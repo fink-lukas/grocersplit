@@ -1,5 +1,12 @@
 import sys
 import os
+from pathlib import Path
+
+# Ensure backend directory is on sys.path for direct script execution
+backend_dir = str(Path(__file__).resolve().parent)
+if backend_dir not in sys.path:
+    sys.path.insert(0, backend_dir)
+
 from sqlmodel import Session, select
 from app.database import engine
 from app.models import User

@@ -1,6 +1,6 @@
 import asyncio
 import os
-from app.notifications_ha import send_ha_notification
+from app.services.notification_service import send_ha_notification
 
 async def main():
     print("Testing send_ha_notification with url...")

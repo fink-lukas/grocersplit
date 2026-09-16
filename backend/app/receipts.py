@@ -537,6 +537,66 @@ def split_item_quantity_endpoint(
     return {"message": "Item split"}
 
 
+class SplitAmountRequest(BaseModel):
+    parts: int = 2
+    first_part_cents: Optional[int] = None
+
+
+@router.post("/{receipt_id}/items/{item_id}/split-amount")
+def split_item_amount_endpoint(
+    receipt_id: int,
+    item_id: int,
+    data: Optional[SplitAmountRequest] = None,
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    receipt = db.get(Receipt, receipt_id)
+    if not receipt:
+        raise HTTPException(status_code=404, detail="Receipt not found")
+    if not can_manage_receipt(receipt, current_user):
+        raise HTTPException(status_code=403, detail="Not authorized to modify this receipt")
+    if receipt.status != "pending":
+        raise HTTPException(status_code=400, detail="Can only split items in pending receipts")
+
+    item = db.get(Item, item_id)
+    if not item or item.receipt_id != receipt_id:
+        raise HTTPException(status_code=404, detail="Item not found on this receipt")
+
+    total = item.price
+    if abs(total) < 2:
+        raise HTTPException(status_code=400, detail="Price too small to split")
+
+    p1 = total // 2
+    p2 = total - p1
+    if data and data.first_part_cents is not None and 0 < data.first_part_cents < total:
+        p1 = data.first_part_cents
+        p2 = total - p1
+
+    orig_name = item.name
+    item.price = p1
+    if not item.name.endswith("(1/2)"):
+        item.name = f"{orig_name} (1/2)"
+
+    new_item = Item(
+        receipt_id=receipt_id,
+        product_id=item.product_id,
+        name=f"{orig_name} (2/2)",
+        raw_name=item.raw_name,
+        sku=item.sku,
+        item_type=item.item_type,
+        price=p2,
+        quantity=1,
+        unit=item.unit
+    )
+    db.add(item)
+    db.add(new_item)
+    db.commit()
+    db.refresh(item)
+    db.refresh(new_item)
+    return {"message": "Item amount split successfully", "item1": item, "item2": new_item}
+
+
+
 @router.post("/{receipt_id}/finalize")
 def finalize_receipt(
     receipt_id: int,
@@ -569,6 +629,27 @@ def archive_receipt(
     db.add(receipt)
     db.commit()
     return {"message": "Receipt archived"}
+
+
+@router.post("/{receipt_id}/unarchive")
+def unarchive_receipt(
+    receipt_id: int,
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    receipt = db.get(Receipt, receipt_id)
+    if not receipt:
+        raise HTTPException(status_code=404, detail="Receipt not found")
+    if not can_manage_receipt(receipt, current_user):
+        raise HTTPException(status_code=403, detail="Not authorized to unarchive this receipt")
+    if receipt.status != "archived":
+        raise HTTPException(status_code=400, detail="Receipt is not archived")
+
+    receipt.status = "split"
+    db.add(receipt)
+    db.commit()
+    return {"message": "Receipt unarchived to split status"}
+
 
 
 @router.post("/{receipt_id}/revert")
