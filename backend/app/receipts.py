@@ -94,6 +94,7 @@ async def upload_receipt(
             except Exception:
                 pass
 
+        total_val = parsed_data.get("total") or parsed_data.get("total_cents") or parsed_data.get("items_sum", 0)
         receipt = Receipt(
             uploader_id=current_user.id,
             image_path=file_path,
@@ -101,7 +102,7 @@ async def upload_receipt(
             merchant_name=merchant_name,
             purchase_date=purchase_date or datetime.utcnow(),
             raw_json=json.dumps(parsed_data),
-            total_amount=parsed_data.get("total_cents", 0),
+            total_amount=total_val,
             status="pending",
             mismatch=parsed_data.get("mismatch", False)
         )
@@ -268,6 +269,25 @@ def get_receipt(
     is_part = any(p.user_id == current_user.id for p in receipt.participants)
     if not is_part and not can_manage_receipt(receipt, current_user):
         raise HTTPException(status_code=403, detail="Not authorized")
+
+    # Auto-heal total_amount if it was saved as 0 due to parsed_data key mismatch
+    if receipt.total_amount == 0 and receipt.items:
+        healed_total = None
+        if receipt.raw_json:
+            try:
+                rj = json.loads(receipt.raw_json)
+                healed_total = rj.get("total") or rj.get("total_cents")
+            except Exception:
+                pass
+        if not healed_total:
+            healed_total = sum(int(round(it.price * it.quantity)) for it in receipt.items)
+        if healed_total and healed_total > 0:
+            receipt.total_amount = healed_total
+            items_sum = sum(int(round(it.price * it.quantity)) for it in receipt.items)
+            receipt.mismatch = abs(items_sum - receipt.total_amount) > 2
+            db.add(receipt)
+            db.commit()
+            db.refresh(receipt)
     
     items = sorted(receipt.items, key=lambda x: x.id)
 

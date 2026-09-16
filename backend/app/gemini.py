@@ -412,6 +412,7 @@ async def parse_receipt(file_path: str):
     return {
         "items": grocer_items,
         "total": receipt_total_cents,
+        "total_cents": receipt_total_cents,
         "mismatch": mismatch,
         "items_sum": items_sum_cents,
         "merchant": data.get("merchant", {}),
