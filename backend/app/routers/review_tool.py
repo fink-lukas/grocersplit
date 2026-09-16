@@ -1069,7 +1069,7 @@ def serve_review_workstation():
                         <!-- 1-Click Quick Actions for Pfand & Rabatt -->
                         <div class="flex items-center gap-1.5">
                             <button 
-                                onclick="quickMatchSpecial(${idx}, '${escapeHtml(item.raw_name)}', '${escapeHtml(item.store)}', ${item.count}, 'Pfand')"
+                                onclick="quickMatchSpecial(${idx}, 'Pfand')"
                                 title="Mark as Pfand deposit and bulk-link all occurrences"
                                 class="px-2.5 py-2 bg-emerald-600/20 hover:bg-emerald-600 text-emerald-300 hover:text-white border border-emerald-500/40 rounded-xl text-xs font-bold transition flex items-center gap-1 shadow-sm"
                             >
@@ -1078,7 +1078,7 @@ def serve_review_workstation():
                             </button>
 
                             <button 
-                                onclick="quickMatchSpecial(${idx}, '${escapeHtml(item.raw_name)}', '${escapeHtml(item.store)}', ${item.count}, 'Rabatt')"
+                                onclick="quickMatchSpecial(${idx}, 'Rabatt')"
                                 title="Mark as Rabatt discount and bulk-link all occurrences"
                                 class="px-2.5 py-2 bg-amber-600/20 hover:bg-amber-600 text-amber-300 hover:text-white border border-amber-500/40 rounded-xl text-xs font-bold transition flex items-center gap-1 shadow-sm"
                             >
@@ -1108,7 +1108,7 @@ def serve_review_workstation():
 
                         <!-- Standard Link Button -->
                         <button 
-                            onclick="bulkMatchItem(${idx}, '${escapeHtml(item.raw_name)}', '${escapeHtml(item.store)}', ${item.count})" 
+                            onclick="bulkMatchItem(${idx})" 
                             class="bg-brand-600 hover:bg-brand-500 text-white font-bold px-3.5 py-2 rounded-xl text-xs shadow-md shadow-brand-600/20 transition shrink-0 flex items-center gap-1.5"
                         >
                             <span>Link All (${item.count})</span>
@@ -1120,7 +1120,13 @@ def serve_review_workstation():
             }).join('');
         }
 
-        async function quickMatchSpecial(idx, rawName, store, count, specialType) {
+        async function quickMatchSpecial(idx, specialType) {
+            const item = currentSortedFilteredItems[idx];
+            if (!item) return;
+            const rawName = item.raw_name;
+            const store = item.store;
+            const count = item.count;
+
             // specialType is 'Pfand' or 'Rabatt'
             let canonical = specialType;
             // If the raw name already has details, e.g. "Pfand Flasche", keep it or default to specialType
@@ -1132,7 +1138,13 @@ def serve_review_workstation():
             await executeBulkMatch(idx, rawName, store, count, canonical, specialType);
         }
 
-        async function bulkMatchItem(idx, rawName, store, count) {
+        async function bulkMatchItem(idx) {
+            const item = currentSortedFilteredItems[idx];
+            if (!item) return;
+            const rawName = item.raw_name;
+            const store = item.store;
+            const count = item.count;
+
             const canonInput = document.getElementById(`canonInput-${idx}`);
             const catSelect = document.getElementById(`catSelect-${idx}`);
             const canonName = (canonInput ? canonInput.value : '').trim();

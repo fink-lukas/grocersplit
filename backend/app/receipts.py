@@ -63,9 +63,9 @@ async def upload_receipt(
             
     await run_in_threadpool(save_file)
     
-    # Process with Gemini in threadpool
+    # Process with Gemini
     try:
-        parsed_data = await run_in_threadpool(parse_receipt, file_path)
+        parsed_data = await parse_receipt(file_path)
     except RateLimitExceeded as e:
         if os.path.exists(file_path):
             os.remove(file_path)
